@@ -18,7 +18,7 @@ class Server
         this.#commands.set("get_files", this.#GetFiles.bind(this));
         this.#commands.set("read_file", this.#ReadFile.bind(this));
         this.#commands.set("write_file", this.#WriteFile.bind(this));
-        
+        this.#commands.set("create_directory", this.#CreateDirectory.bind(this));
     }
 
     async StartPolling()
@@ -82,8 +82,14 @@ class Server
 
     async #WriteFile(sJson, jRet)
     {
-        var localFile = this.#MapPath(sJson.file_name);
+        var localFile = this.#MapPath(sJson.file_name);        
         await fsp.writeFile(localFile, sJson.content, 'utf-8');
+    }
+
+    #CreateDirectory(sJson, jRet)
+    {
+        var localDir = this.#MapPath(sJson.dir_name);    
+        fsys.mkdirSync(localDir, {recursive: true});
     }
 
     async #ReadFile(sJson, jRet)
@@ -141,15 +147,27 @@ class Server
         var text = await resp.text();
     }
 
+    CD(sPath)
+    {
+        var localDir = this.#MapPath(sPath);    
+        fsys.mkdirSync(localDir, { recursive: true });
+    }
 }
 
+class ServerConfig
+{
+    email = 'blicht10069@gmail.com';
+    root_dir = 'd:\\';
+}
 
-module.exports = { Server }
+module.exports = { Server, ServerConfig }
+
 
 console.log('starting server');
-var s = new Server({ email: 'blicht10069@gmail.com', root_dir: 'd:\\'});
+var s = new Server(new ServerConfig());
 console.log('polling');
 s.StartPolling().then(()=>console.log('done')).catch((r)=>console.log('error:', r));
+
 
 
 
