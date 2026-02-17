@@ -1,6 +1,9 @@
 const fsp = require('fs').promises;
 const fsys = require('fs')
 const psys = require('path')
+const { exec: exe_launcher } = require('child_process');
+const util = require('util');
+const startProcessAsync = util.promisify(exe_launcher);
 
 class Server
 {    
@@ -23,6 +26,8 @@ class Server
         this.#commands.set("create_directory", this.#CreateDirectory.bind(this));
         this.#commands.set("record_message", this.#RecordMessage.bind(this));
         this.#commands.set("load_messages", this.#LoadMessages.bind(this));
+        this.#commands.set("get_virtual_directory_location", (sJson, jRet)=>{ jRet.virtual_directory = this.root_dir; });
+        this.#commands.set("execute_powershell", this.#RunPowerShellScript.bind(this));
     }
 
     async StartPolling()
@@ -82,6 +87,42 @@ class Server
             return stat.isDirectory();
         }
         catch { return false; }
+    }    
+
+    async #RunPowerShellScript(sJson, jRet)
+    {
+        if (sJson.ps1_file == null)
+        {
+            jRet.success = false;
+            jRet.msg = "Filename (ps1_file) must be supplied"
+        }
+        else
+        {
+            try
+            {
+                var sFileName = this.#MapPath(sJson.ps1_file);
+                var timeout = sJson.time_out ?? 60000;
+                var args = sJson.args ?? "";
+                const { stdout, stderr } = await startProcessAsync('powershell.exe ' + sFileName + " " + args,
+                    { timeout: timeout, killSignal: 'SIGTERM'});
+                jRet.stdout = stdout;
+                jRet.stderr = stderr;
+            }
+            catch(err)
+            {
+                jRet.success = false;
+                if (err.killed === true)
+                {
+                    jRet.msg = "script timed out prior to completion";
+                }
+                else
+                {
+                    jRet.msg = err.message;
+                }
+                jRet.stdout = err.stdout;
+                jRet.stderr = err.stderr;
+            }
+        }
     }
 
     async #RecordMessage(sJson, jRet)
