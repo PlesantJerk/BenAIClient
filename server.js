@@ -8,6 +8,7 @@ class Server
     constructor(config)
     {
         this.#sEmail = config.email;
+        this.root_dir = config.root_dir;
         this.#commands = new Map();
         this.#commands.set("select_new_directory", this.#selectNewDirectory.bind(this));
         this.#commands.set("get_directories", this.#GetDirectories.bind(this));
@@ -88,7 +89,7 @@ class Server
 module.exports = { Server }
 
 console.log('starting server');
-var s = new Server({ email: 'blicht10069@gmail.com'});
+var s = new Server({ email: 'blicht10069@gmail.com', root_dir: 'd:\\'});
 console.log('polling');
 s.Poll().then(()=>console.log('done')).catch((r)=>console.log('error:', r));
 
