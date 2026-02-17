@@ -6,12 +6,14 @@ class Server
 {    
     #commands
     #sEmail
+    conversation_location = '.';
     root_dir = '.';
 
     constructor(config)
     {
         this.#sEmail = config.email;
         this.root_dir = config.root_dir;
+        this.conversation_location = config.conversation_location;
         this.#commands = new Map();
         this.#commands.set("select_new_directory", this.#selectNewDirectory.bind(this));
         this.#commands.set("get_directories", this.#GetDirectories.bind(this));
@@ -19,6 +21,8 @@ class Server
         this.#commands.set("read_file", this.#ReadFile.bind(this));
         this.#commands.set("write_file", this.#WriteFile.bind(this));
         this.#commands.set("create_directory", this.#CreateDirectory.bind(this));
+        this.#commands.set("record_message", this.#RecordMessage.bind(this));
+        this.#commands.set("load_messages", this.#LoadMessages.bind(this));
     }
 
     async StartPolling()
@@ -80,6 +84,51 @@ class Server
         catch { return false; }
     }
 
+    async #RecordMessage(sJson, jRet)
+    {
+        var payload = JSON.parse(sJson.payload)
+        if (payload.conversation_id > 0)
+        {
+            var p = psys.join(this.conversation_location, payload.conversation_id.toString());
+            var fname = BigInt(Date.now());
+            var fileName = psys.join(p, fname + '.json');
+            if (!this.#directoryExists(p))
+                fsys.mkdirSync(p);
+            await fsp.writeFile(fileName, JSON.stringify(payload), 'utf-8');
+        }
+    }
+
+    async #LoadMessages(sJson, jRet)
+    {
+        var conversation_id = sJson.conversation_id;
+        if (conversation_id < 0)
+        {
+            jRet.success = false;
+            jRet.msg = "Invalid conversation id";
+        }
+        else
+        {
+            var p = psys.join(this.conversation_location, conversation_id.toString());
+            if (!this.#directoryExists(p))
+            {
+                jRet.success =false;
+                jRet.msg = "conversation id not found."
+            }
+            else
+            {
+                var files = this.#GetFilesFromPath(p, true);
+                files.sort();
+                var json_payload = [];
+                for(var name of files)
+                {                    
+                    var content = await fsp.readFile(psys.join(name), 'utf-8');
+                    json_payload.push(JSON.parse(content));
+                }
+                jRet.messages = json_payload;
+            }
+        }
+    }
+
     async #WriteFile(sJson, jRet)
     {
         var localFile = this.#MapPath(sJson.file_name);        
@@ -113,32 +162,46 @@ class Server
 
     async #GetDirectories(sJson, jRet)
     {
-        var fd = fsys.readdirSync(this.root_dir, { withFileTypes: true });
-        var dirs = [];
+        var sPath = psys.join(this.root_dir, sJson.path);        
+        jRet.directories = this.#GetDirectories(sPath);
+    }
+
+    #GetDirectoriesFromPath(sPath)
+    {        
+        var fd = fsys.readdirSync(sPath, { withFileTypes: true });
+        var ret = [];
         for(var entry of fd)
         {
             if (entry.isDirectory())
             {
-                dirs.push(entry.name);
+                ret.push(entry.name);
             }
         }
-        jRet.directories = dirs;
+        return ret;
     }
 
     async #GetFiles(sJson, jRet)
     {
-        var fd = fsys.readdirSync(this.root_dir, { withFileTypes: true });
-        var files = [];
+        var sPath = psys.join(this.root_dir, sJson.path);
+        jRet.files = this.#GetFilesFromPath(sPath);        
+    }
+
+    #GetFilesFromPath(sPath, bUseFullPath=false)
+    {
+        var fd = fsys.readdirSync(sPath, { withFileTypes: true });
+        var ret = [];
         for(var entry of fd)
         {
             if (entry.isFile())
             {
-                files.push(entry.name);
+                if (bUseFullPath)
+                    ret.push(psys.join(entry.path, entry.name));
+                else
+                    ret.push(entry.name);
             }
         }
-        jRet.files = files;
+        return ret;
     }
-
     
     async Reply(sId, payload = {})
     {
@@ -158,6 +221,7 @@ class ServerConfig
 {
     email = 'blicht10069@gmail.com';
     root_dir = 'd:\\';
+    conversation_location = 'd:\\temp\\conversations'
 }
 
 module.exports = { Server, ServerConfig }
