@@ -1,10 +1,13 @@
-
+const fsp = require('fs').promises;
+const fsys = require('fs')
+const psys = require('path')
 
 class Server
-{
-    #fsys = require('fs')
+{    
     #commands
     #sEmail
+    root_dir = '.';
+
     constructor(config)
     {
         this.#sEmail = config.email;
@@ -13,46 +16,20 @@ class Server
         this.#commands.set("select_new_directory", this.#selectNewDirectory.bind(this));
         this.#commands.set("get_directories", this.#GetDirectories.bind(this));
         this.#commands.set("get_files", this.#GetFiles.bind(this));
+        this.#commands.set("read_file", this.#ReadFile.bind(this));
+        this.#commands.set("write_file", this.#WriteFile.bind(this));
         
     }
 
-    root_dir = 'd:\\';
-
-    
-    async #selectNewDirectory(sJson, jRet)
+    async StartPolling()
     {
-        console.log(`You got select_new_dir for ${sJson.id}`);        
-    }
-
-    async #GetDirectories(sJson, jRet)
-    {
-        var fd = this.#fsys.readdirSync(this.root_dir, { withFileTypes: true });
-        var dirs = [];
-        for(var entry of fd)
+        while(true)
         {
-            if (entry.isDirectory())
-            {
-                dirs.push(entry.name);
-            }
+            await this.#Poll();
         }
-        jRet.directories = dirs;
     }
 
-    async #GetFiles(sJson, jRet)
-    {
-        var fd = this.#fsys.readdirSync(this.root_dir, { withFileTypes: true });
-        var files = [];
-        for(var entry of fd)
-        {
-            if (entry.isFile())
-            {
-                files.push(entry.name);
-            }
-        }
-        jRet.files = files;
-    }
-
-    async Poll()
+    async #Poll()
     {        
         var resp = await fetch(`https://benai.org/debugger_hook?id=${this.#sEmail}`, { method: 'get' });        
         var req = await resp.json();        
@@ -78,18 +55,101 @@ class Server
         }
     }
 
+    #MapPath(sPath)
+    {
+        return psys.join(this.root_dir, sPath);
+    }
+
+    #fileExists(sFileName)
+    {
+        try
+        {
+            fsys.accessSync(sFileName, fsp.constants.F_OK);            
+            return true;
+        }
+        catch { return false; }
+    }
+
+    #directoryExists(sPath)
+    {
+        try
+        {
+            var stat = fsys.statSync(sPath);
+            return stat.isDirectory();
+        }
+        catch { return false; }
+    }
+
+    async #WriteFile(sJson, jRet)
+    {
+        var localFile = this.#MapPath(sJson.file_name);
+        await fsp.writeFile(localFile, sJson.content, 'utf-8');
+    }
+
+    async #ReadFile(sJson, jRet)
+    {
+        var localFile = this.#MapPath(sJson.file_name);
+        if (!this.#fileExists(localFile))
+        {
+            jRet.success = false;
+            jRet.msg = `file ${sJson.file_name} not found.`;
+        }
+        else
+        {                        
+            jRet.msg = await fsp.readFile(localFile, 'utf-8');
+        }
+    }
+
+    async #selectNewDirectory(sJson, jRet)
+    {
+        console.log(`You got select_new_dir for ${sJson.id}`);        
+    }
+
+    async #GetDirectories(sJson, jRet)
+    {
+        var fd = fsys.readdirSync(this.root_dir, { withFileTypes: true });
+        var dirs = [];
+        for(var entry of fd)
+        {
+            if (entry.isDirectory())
+            {
+                dirs.push(entry.name);
+            }
+        }
+        jRet.directories = dirs;
+    }
+
+    async #GetFiles(sJson, jRet)
+    {
+        var fd = fsys.readdirSync(this.root_dir, { withFileTypes: true });
+        var files = [];
+        for(var entry of fd)
+        {
+            if (entry.isFile())
+            {
+                files.push(entry.name);
+            }
+        }
+        jRet.files = files;
+    }
+
+    
     async Reply(sId, payload = {})
     {
         if (payload == null) payload = {};
         var resp = await fetch(`https://benai.org/debugger_reply?id=${sId}`, { method: 'post', body: JSON.stringify(payload)})
         var text = await resp.text();
     }
+
 }
+
 
 module.exports = { Server }
 
 console.log('starting server');
 var s = new Server({ email: 'blicht10069@gmail.com', root_dir: 'd:\\'});
 console.log('polling');
-s.Poll().then(()=>console.log('done')).catch((r)=>console.log('error:', r));
+s.StartPolling().then(()=>console.log('done')).catch((r)=>console.log('error:', r));
+
+
 
