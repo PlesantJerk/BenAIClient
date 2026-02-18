@@ -82,7 +82,7 @@ class Server
     {
         try
         {
-            fsys.accessSync(sFileName, fsp.constants.F_OK);            
+            fsys.accessSync(sFileName, fsys.constants.F_OK);            
             return true;
         }
         catch { return false; }
@@ -213,7 +213,7 @@ class Server
     async #GetDirectories(sJson, jRet)
     {
         var sPath = psys.join(this.root_dir, sJson.path);        
-        jRet.directories = this.#GetDirectories(sPath);
+        jRet.directories = this.#GetFilesFromPath(sPath);
     }
 
     #GetDirectoriesFromPath(sPath)
