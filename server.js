@@ -4,6 +4,7 @@ const psys = require('path')
 const { exec: exe_launcher } = require('child_process');
 const util = require('util');
 const startProcessAsync = util.promisify(exe_launcher);
+const { FindInFile } = require('./find-in-files.js');
 
 class Server
 {    
@@ -28,6 +29,7 @@ class Server
         this.#commands.set("load_messages", this.#LoadMessages.bind(this));
         this.#commands.set("get_virtual_directory_location", (sJson, jRet)=>{ jRet.virtual_directory = this.root_dir; });
         this.#commands.set("execute_powershell", this.#RunPowerShellScript.bind(this));
+        this.#commands.set("find_in_files", this.#SearchFiles.bind(this));
     }
 
     async StartPolling()
@@ -36,6 +38,13 @@ class Server
         {
             await this.#Poll();
         }
+    }
+
+    async #SearchFiles(sJson, jRet)
+    {
+        var ff = new FindInFile(sJson);
+        var sPath = this.#MapPath(sJson.path);
+        jRet.found_files = await ff.Search(sPath);        
     }
 
     async #Poll()
@@ -261,7 +270,7 @@ class Server
 class ServerConfig
 {
     email = 'blicht10069@gmail.com';
-    root_dir = 'd:\\';
+    root_dir = 'D:\\code\\git\\Phone\\ChatAblaze\\LLMAccess';
     conversation_location = 'd:\\temp\\conversations'
 }
 
