@@ -61,7 +61,6 @@ class TempCache
                     }
                     else
                     {
-                        console.log('moving item to back of line ', item.key);
                         entry = new TempCacheEntry(item);
                         this.#items.set(item.key, entry);
                         this.#buffer.push(entry);
