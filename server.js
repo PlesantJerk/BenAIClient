@@ -5,17 +5,21 @@ const { exec: exe_launcher } = require('child_process');
 const util = require('util');
 const startProcessAsync = util.promisify(exe_launcher);
 const { FindInFile } = require('./find-in-files.js');
+const { ConsoleShell } = require('./console-shell.js')
+const { setTimeout: delay } = require('node:timers/promises');
 
 class Server
 {    
     #commands
     #sEmail
+    #CShell
     conversation_location = '.';
     root_dir = '.';
 
     constructor(config)
     {
         this.#sEmail = config.email;
+        this.#CShell = new ConsoleShell();
         this.root_dir = config.root_dir;
         this.conversation_location = config.conversation_location;
         this.#commands = new Map();
@@ -30,6 +34,9 @@ class Server
         this.#commands.set("get_virtual_directory_location", (sJson, jRet)=>{ jRet.virtual_directory = this.root_dir; });
         this.#commands.set("execute_powershell", this.#RunPowerShellScript.bind(this));
         this.#commands.set("find_in_files", this.#SearchFiles.bind(this));
+        this.#commands.set("create_shell_session", (sJson, jRet)=>{ jRet.session_id=this.#CShell.CreateShell().session_id; });
+        this.#commands.set("send_command_to_console_shell", this.#SendCommandToConsoleShell.bind(this));
+        this.#commands.set("read_screen_from_console_shell", this.#ReadScreenFromConsoleShell.bind(this));
     }
 
     async StartPolling()
@@ -97,6 +104,45 @@ class Server
         }
         catch { return false; }
     }    
+
+    async #SendCommandToConsoleShell(sJson, jRet)
+    {
+        var ms = sJson.wait_time_in_ms ?? 10000;
+        if (ms > 10000) ms = 10000;
+        var session_id = Number.parseInt(sJson.session_id);
+        var p = this.#CShell.GetSession(session_id);
+        console.log('process: ', p);
+        if (p)
+        {
+            p.SendCommand(sJson.command_line + '\r');
+            await delay(ms);
+            jRet.console_output = p.GetStdOut(25);
+        }
+        else
+        {
+            jRet.success = false;
+            jRet.msg = `Error: ${session_id} is not valid.  Its possible this shell was closed due to inactivity.  Shell's are held at least 20 minute(s) after last use.`;
+        }
+    }
+
+    async #ReadScreenFromConsoleShell(sJson, jRet)
+    {
+        var ms = sJson.wait_time_in_ms ?? 10000;
+        if (ms > 20000) ms = 20000;
+        var session_id = Number.parseInt(sJson.session_id);
+        var lineCount = sJson.number_of_lines ?? 25;
+        var p = this.#CShell.GetSession(session_id);
+        if (p)
+        {
+            await delay(ms);
+            jRet.console_output = p.GetStdOut(lineCount);
+        }
+        else
+        {
+            jRet.success = false;
+            jRet.msg = `Error: ${session_id} is not valid.  Its possible this shell was closed due to inactivity.  Shell's are held at least 20 minute(s) after last use.`;
+        }
+    }
 
     async #RunPowerShellScript(sJson, jRet)
     {

@@ -8,6 +8,7 @@ class ConsoleShell
 
     constructor()
     {
+        console.log('new instance of ConsoleShell');
         this.#session_cache = new TempCache();
     }
 
@@ -16,6 +17,9 @@ class ConsoleShell
         var ret = new ConsoleShellSession(this.#session_id_generator);
         this.#session_id_generator++;
         this.#session_cache.set(ret.session_id, ret);
+        console.log('stored session id: ', ret.session_id);
+        var p = this.#session_cache.get(ret.session_id);
+        console.log('stored item is: ', p);
         return ret;
     }
 
@@ -75,9 +79,14 @@ class ConsoleShellSession
         this.#process = null;
     }
 
-    GetStdOut()
+    GetStdOut(limitLines = 0)
     {
-        return this.#out_buffer.join("");
+        if (limitLines <= 0)
+            return this.#out_buffer.join("");
+        else
+        {
+            return this.#out_buffer.slice(-limitLines).join("");
+        }
     }    
 
     SendCommand(sCmd)
