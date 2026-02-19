@@ -15,7 +15,7 @@ const commands = new Map();
         if (host_config.email === '' || host_config.email == null)
         {   
             var block =true;     
-            rl.question("please supply a user_id", async (line)=>
+            rl.question("please supply a user_id: ", async (line)=>
             {
                 host_config.email = line.trim();
                 await fsp.writeFile('./config.json', JSON.stringify(host_config), 'utf-8');
