@@ -1,16 +1,19 @@
-to use modify server.js 
+you can modify the config.json with your email address and default root_dir
 
-```node.js
-class ServerConfig
+```config.json
 {
-    email = 'blicht10069@gmail.com';
-    root_dir = 'D:\\code\\git\\Phone\\ChatAblaze\\LLMAccess';
-    conversation_location = 'd:\\temp\\conversations'
-}
+    "email":"You account email",
+    "root_dir":"Starting location of where you want the AI to operate on your local machine",
+    "conversation_location":"Storage location for private conversations"}
+
 ```
 
 alter the email to your email, root_dir and conversation_location to places on your drive
 
 then to run just
 
-> node server.js
+> node aiqa.js
+
+
+note: you can change the dir once you run the aiqa using the `cd [path]` command
+
