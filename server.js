@@ -37,6 +37,8 @@ class Server
         this.#commands.set("create_shell_session", (sJson, jRet)=>{ jRet.session_id=this.#CShell.CreateShell().session_id; });
         this.#commands.set("send_command_to_console_shell", this.#SendCommandToConsoleShell.bind(this));
         this.#commands.set("read_screen_from_console_shell", this.#ReadScreenFromConsoleShell.bind(this));
+        this.#commands.set("terminate_shell_session", (sJson, jRet)=>{ this.#CShell.GetSession(Number.parseInt(sJson.session_id)).Terminate(); });
+        this.#commands.set("get_local_file", this.#GetLocalFile.bind(this));
     }
 
     async StartPolling()
@@ -282,6 +284,27 @@ class Server
         jRet.files = this.#GetFilesFromPath(sPath);        
     }
 
+    async #GetLocalFile(sJson, jRet)
+    {
+        if (sJson.file_name)
+        {
+            if (!this.#fileExists(sJson.file_name))
+            {
+                jRet.success= false;
+                jRet.msg = `file ${sJson.file_name} not found.`;
+            }
+            else
+            {
+                jRet.file_base_64 = await fsp.readFile(sJson.file_name, 'base64');                 
+            }
+        }
+        else
+        {
+            jRet.success = false;
+            jRet.msg = "You must supply a file_name";
+        }
+    }
+
     #GetFilesFromPath(sPath, bUseFullPath=false)
     {
         var fd = fsys.readdirSync(sPath, { withFileTypes: true });
@@ -323,10 +346,6 @@ class ServerConfig
 module.exports = { Server, ServerConfig }
 
 
-console.log('starting server');
-var s = new Server(new ServerConfig());
-console.log('polling');
-s.StartPolling().then(()=>console.log('done')).catch((r)=>console.log('error:', r));
 
 
 
