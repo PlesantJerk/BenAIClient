@@ -15,9 +15,11 @@ class Server
     #CShell
     conversation_location = '.';
     root_dir = '.';
+    #session_id;
 
     constructor(config)
     {
+        this.#session_id = Date.now();
         this.#sEmail = config.email;
         this.#CShell = new ConsoleShell();
         this.root_dir = config.root_dir;
@@ -58,7 +60,7 @@ class Server
 
     async #Poll()
     {        
-        var resp = await fetch(`https://benai.org/debugger_hook?id=${this.#sEmail}`, { method: 'get' });        
+        var resp = await fetch(`https://benai.org/debugger_hook?id=${this.#sEmail}&session_id=${this.#session_id}`, { method: 'get' });        
         var req = await resp.json();        
         for(var cmd of req)
         {
@@ -345,3 +347,9 @@ class ServerConfig
 }
 
 module.exports = { Server, ServerConfig }
+
+
+
+
+
+

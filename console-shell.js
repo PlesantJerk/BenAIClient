@@ -40,7 +40,12 @@ class ConsoleShellSession
     constructor(session_id)
     {
         this.#session_id = session_id;
-        this.#process = spawn("cmd.exe", [], { shell: false });        
+        var shellcmd = "cmd.exe";
+        if (process.platform !== "win32")
+        {
+            shellcmd = process.env.SHELL;
+        }
+        this.#process = spawn(shellcmd, [], { shell: false });        
         this.#process.stdout.on('data', this.#on_out.bind(this));
         this.#process.stderr.on('data', this.#on_err.bind(this));
         this.#process.on('close', this.#on_close.bind(this));
@@ -70,6 +75,7 @@ class ConsoleShellSession
     
     #on_close(code)
     {
+        console.log('session id ', this.#session_id, ' closed with code ', code);
         this.#process = null;    
     }
 
@@ -92,7 +98,17 @@ class ConsoleShellSession
     SendCommand(sCmd)
     {
         if (this.#process)
+        {
+            console.log('CMD BYTES:', Array.from(Buffer.from(sCmd)));
+            if(process.platform !== "win32")
+            {
+                if (sCmd.endsWith("\n"))
+                    sCmd = sCmd.slice(0, -1);
+                if (sCmd.endsWith("\r"))
+                    sCmd = sCmd.slice(0, -1);
+            }
             this.#process.stdin.write(sCmd + "\n");
+        }
         else
             throw new Error("Process is not running");
     }
