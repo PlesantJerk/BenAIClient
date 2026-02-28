@@ -7,6 +7,7 @@ const startProcessAsync = util.promisify(exe_launcher);
 const { FindInFile } = require('./find-in-files.js');
 const { ConsoleShell } = require('./console-shell.js')
 const { setTimeout: delay } = require('node:timers/promises');
+const { stringify } = require('node:querystring');
 
 class Server
 {    
@@ -64,6 +65,7 @@ class Server
         var req = await resp.json();        
         for(var cmd of req)
         {
+            console.log('------------------', new Date().toLocaleString(), '------------------');
             console.log('incomming command: ', cmd);
             var cb = this.#commands.get(cmd.command);
             if (cb != null)
@@ -71,7 +73,7 @@ class Server
                 var jret = { success: true, msg: ""};
                 try
                 {
-                    await cb(cmd, jret);                    
+                    await cb(cmd, jret);                                        
                 }
                 catch(err)
                 {
@@ -79,6 +81,9 @@ class Server
                     jret.success = false;
                     jret.msg = JSON.stringify(err);                    
                 }
+                console.log('result: ');
+                console.log(JSON.stringify(jret));
+                console.log('------------------');                
                 await this.Reply(cmd.id, jret);
             }
         }
@@ -264,7 +269,7 @@ class Server
     async #GetDirectories(sJson, jRet)
     {
         var sPath = this.#MapPath(sJson.path);        
-        jRet.directories = this.#GetFilesFromPath(sPath);
+        jRet.directories = this.#GetDirectoriesFromPath(sPath);
     }
 
     #GetDirectoriesFromPath(sPath)

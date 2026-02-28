@@ -50,7 +50,7 @@ class FindInFile
         {
             if (file.isFile() && this.#IsIncluded(file))
             {                
-                var fullFileName = psys.join(file.path, file.name);                
+                var fullFileName = psys.join(file.path || file.parentPath, file.name);                
                 var txt = await fsys.readFile(fullFileName, 'utf-8');    
                 this.#regex.lastIndex = 0;            
                 var matches = [...txt.matchAll(this.#regex)];
@@ -87,8 +87,9 @@ class FindInFile
     }
 
     #IsExcludedPath(oFile)
-    {
-        var sPath = oFile.path.toLowerCase();
+    {        
+        var sPath = oFile.path || oFile.parentPath;
+        sPath = sPath.toLowerCase();
         var parts = sPath.split(psys.sep);
         var ret = false;
         for(var excl of this.#excludeDirs)
