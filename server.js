@@ -91,7 +91,7 @@ class Server
 
     #MapPath(sPath)
     {
-        sPath = sPath.replaceAll("\\", psys.sep);
+        sPath = sPath.replaceAll("\\", psys.sep);        
         return psys.join(this.root_dir, sPath);
     }
 
@@ -288,7 +288,7 @@ class Server
 
     async #GetFiles(sJson, jRet)
     {
-        var sPath = this.#MapPath(sJson.path);
+        var sPath = this.#MapPath(sJson.path);        
         jRet.files = this.#GetFilesFromPath(sPath);        
     }
 
