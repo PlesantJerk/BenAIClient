@@ -7,6 +7,7 @@ const startProcessAsync = util.promisify(exe_launcher);
 const { FindInFile } = require('./find-in-files.js');
 const { ConsoleShell } = require('./console-shell.js')
 const { setTimeout: delay } = require('node:timers/promises');
+const { stringify } = require('node:querystring');
 
 class Server
 {    
@@ -15,9 +16,11 @@ class Server
     #CShell
     conversation_location = '.';
     root_dir = '.';
+    #session_id;
 
     constructor(config)
     {
+        this.#session_id = Date.now();
         this.#sEmail = config.email;
         this.#CShell = new ConsoleShell();
         this.root_dir = config.root_dir;
@@ -58,10 +61,11 @@ class Server
 
     async #Poll()
     {        
-        var resp = await fetch(`https://benai.org/debugger_hook?id=${this.#sEmail}`, { method: 'get' });        
+        var resp = await fetch(`https://benai.org/debugger_hook?id=${this.#sEmail}&session_id=${this.#session_id}`, { method: 'get' });        
         var req = await resp.json();        
         for(var cmd of req)
         {
+            console.log('------------------', new Date().toLocaleString(), '------------------');
             console.log('incomming command: ', cmd);
             var cb = this.#commands.get(cmd.command);
             if (cb != null)
@@ -69,7 +73,7 @@ class Server
                 var jret = { success: true, msg: ""};
                 try
                 {
-                    await cb(cmd, jret);                    
+                    await cb(cmd, jret);                                        
                 }
                 catch(err)
                 {
@@ -77,6 +81,9 @@ class Server
                     jret.success = false;
                     jret.msg = JSON.stringify(err);                    
                 }
+                console.log('result: ');
+                console.log(JSON.stringify(jret));
+                console.log('------------------');                
                 await this.Reply(cmd.id, jret);
             }
         }
@@ -84,7 +91,7 @@ class Server
 
     #MapPath(sPath)
     {
-        sPath = sPath.replaceAll("\\", psys.sep);
+        sPath = sPath.replaceAll("\\", psys.sep);        
         return psys.join(this.root_dir, sPath);
     }
 
@@ -262,7 +269,7 @@ class Server
     async #GetDirectories(sJson, jRet)
     {
         var sPath = this.#MapPath(sJson.path);        
-        jRet.directories = this.#GetFilesFromPath(sPath);
+        jRet.directories = this.#GetDirectoriesFromPath(sPath);
     }
 
     #GetDirectoriesFromPath(sPath)
@@ -281,7 +288,7 @@ class Server
 
     async #GetFiles(sJson, jRet)
     {
-        var sPath = this.#MapPath(sJson.path);
+        var sPath = this.#MapPath(sJson.path);        
         jRet.files = this.#GetFilesFromPath(sPath);        
     }
 
