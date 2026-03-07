@@ -17,3 +17,5 @@ then to run just
 
 
 note: you can change the dir once you run the aiqa using the `cd [path]` command
+
+other message!
