@@ -46,9 +46,24 @@ class Server
 
     async StartPolling()
     {
+        var cnt = 0;
         while(true)
         {
-            await this.#Poll();
+            try
+            {                                                
+                await this.#Poll();
+                cnt = 0;
+            }
+            catch(err)
+            {
+                console.error('unhandled error while polling for command: ', String(err.stack || err));
+                cnt++;
+                if ((cnt%5) === 0)
+                {
+                    console.log('pausing 5 seconds before re-trying');
+                    await delay(5000);
+                }                
+            }
         }
     }
 
