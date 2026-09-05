@@ -11,6 +11,10 @@
   "license": "ISC",
   "type": "commonjs",
   "devDependencies": {
+    "@types/screenshot-desktop": "^1.15.0",
     "electron": "^40.4.1"
+  },
+  "dependencies": {
+    "screenshot-desktop": "^1.15.6"
   }
 }

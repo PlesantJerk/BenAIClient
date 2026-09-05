@@ -8,6 +8,7 @@ const { FindInFile } = require('./find-in-files.js');
 const { ConsoleShell } = require('./console-shell.js')
 const { setTimeout: delay } = require('node:timers/promises');
 const { stringify } = require('node:querystring');
+const { takeScreenShot } = require('./commands.ts');
 
 class Server
 {    
@@ -42,6 +43,7 @@ class Server
         this.#commands.set("read_screen_from_console_shell", this.#ReadScreenFromConsoleShell.bind(this));
         this.#commands.set("terminate_shell_session", (sJson, jRet)=>{ this.#CShell.GetSession(Number.parseInt(sJson.session_id)).Terminate(); });
         this.#commands.set("get_local_file", this.#GetLocalFile.bind(this));
+        this.#commands.set("screen_shot", takeScreenShot);
     }
 
     async StartPolling()
