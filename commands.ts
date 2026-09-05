@@ -1,7 +1,18 @@
-
-
 const screenshot = require('screenshot-desktop') as typeof import('screenshot-desktop');
 const { keyboard, mouse, Point, Button, Key } = require('@nut-tree-fork/nut-js') as typeof import('@nut-tree-fork/nut-js');
+const koffi = require('koffi') as typeof import('koffi');
+
+const user32 = koffi.load('user32.dll');
+const shcore = koffi.load('shcore.dll');
+
+const monitorFromWindow = user32.func(
+    'void * __stdcall MonitorFromWindow(void *hwnd, uint32_t flags)'
+);
+
+const getScaleFactorForMonitor = shcore.func(
+    'int32_t __stdcall GetScaleFactorForMonitor(void *monitor, _Out_ int32_t *scale)'
+);
+
 type KeyValue = import('@nut-tree-fork/nut-js').Key;
 type Command = {
     id: string,
@@ -25,6 +36,8 @@ type MouseMoveCommand = Command & {
 
 type MouseClickCommand = Command & {
     button: 'left'|'right',
+    x: number,
+    y: number,
     delay: number;
 }
 
@@ -38,6 +51,23 @@ type KeyboardSendKeyCommand = Command & {
     shiftKey: boolean,
     key: string
 }
+
+function getPrimaryDisplayScale(): number
+{
+    const MONITOR_DEFAULTTOPRIMARY = 1;
+    const monitor = monitorFromWindow(null, MONITOR_DEFAULTTOPRIMARY);
+    if (!monitor)
+        throw new Error('Could not locate the primary monitor');
+
+    const scale = [0];
+    const result = getScaleFactorForMonitor(monitor, scale);
+    if (result !== 0 || scale[0] <= 0)
+        throw new Error(`Could not read display scale: ${result}`);
+
+    return scale[0] / 100;
+}
+
+const displayScale = getPrimaryDisplayScale();
 
 async function  delay(time: number) : Promise<void>
 {
@@ -58,13 +88,15 @@ async function takeScreenShot(cmd: ScreenShotCommand, jret: ReturnData)
 
 async function moveMouse(cmd: MouseMoveCommand, jref: ReturnData) :Promise<void>
 {
-    await mouse.setPosition(new Point(cmd.x, cmd.y));
+    await mouse.setPosition(new Point(cmd.x/displayScale, cmd.y/displayScale));
 }
 
 async function mouseClick(cmd: MouseClickCommand, jref: ReturnData) :Promise<void>
 {
+    await mouse.setPosition(new Point(cmd.x/displayScale, cmd.y/displayScale));
+    await delay(30);
     await mouse.click(cmd.button === 'left' ? Button.LEFT : Button.RIGHT);
-    await delay(cmd.delay);
+    await delay(cmd.delay);    
 }
 
 async function keyboardSendText(cmd: KeyboardSendStringCommand, jref: ReturnData) : Promise<void>
