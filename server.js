@@ -8,7 +8,8 @@ const { FindInFile } = require('./find-in-files.js');
 const { ConsoleShell } = require('./console-shell.js')
 const { setTimeout: delay } = require('node:timers/promises');
 const { stringify } = require('node:querystring');
-const { takeScreenShot } = require('./commands.ts');
+const { takeScreenShot, mouseClick, moveMouse, keyboardSendKey, keyboardSendText } = require('./commands.ts');
+
 
 class Server
 {    
@@ -44,6 +45,10 @@ class Server
         this.#commands.set("terminate_shell_session", (sJson, jRet)=>{ this.#CShell.GetSession(Number.parseInt(sJson.session_id)).Terminate(); });
         this.#commands.set("get_local_file", this.#GetLocalFile.bind(this));
         this.#commands.set("screen_shot", takeScreenShot);
+        this.#commands.set('mouse_move', moveMouse);
+        this.#commands.set('mouse_click', mouseClick);
+        this.#commands.set('send_text', keyboardSendText);
+        this.#commands.set('send_key', keyboardSendKey);
     }
 
     async StartPolling()
