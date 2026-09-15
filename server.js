@@ -259,8 +259,17 @@ class Server
 
     async #WriteFile(sJson, jRet)
     {
-        var localFile = this.#MapPath(sJson.file_name);        
-        await fsp.writeFile(localFile, sJson.content, 'utf-8');
+        try
+        {
+            var localFile = this.#MapPath(sJson.file_name);   
+            await fsp.writeFile(localFile, sJson.content, 'utf-8');
+        }
+        catch(err)
+        {
+            console.log('file write error: ', String(err));
+            jRet.success = false;
+            jRet.msg = String(err);
+        }                    
     }
 
     #CreateDirectory(sJson, jRet)

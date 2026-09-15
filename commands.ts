@@ -101,6 +101,7 @@ async function mouseClick(cmd: MouseClickCommand, jref: ReturnData) :Promise<voi
 
 async function keyboardSendText(cmd: KeyboardSendStringCommand, jref: ReturnData) : Promise<void>
 {
+    keyboard.config.autoDelayMs = 10;
     await keyboard.type(cmd.text);
 }
 
