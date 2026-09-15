@@ -8,7 +8,8 @@ const { FindInFile } = require('./find-in-files.js');
 const { ConsoleShell } = require('./console-shell.js')
 const { setTimeout: delay } = require('node:timers/promises');
 const { stringify } = require('node:querystring');
-const { takeScreenShot, mouseClick, moveMouse, keyboardSendKey, keyboardSendText } = require('./commands.ts');
+const { takeScreenShot, mouseClick, moveMouse, keyboardSendKey, keyboardSendText,
+    mouseScroll, mouseDrag, screenshotToClipboard } = require('./commands.ts');
 
 
 class Server
@@ -49,6 +50,9 @@ class Server
         this.#commands.set('mouse_click', mouseClick);
         this.#commands.set('send_text', keyboardSendText);
         this.#commands.set('send_key', keyboardSendKey);
+        this.#commands.set('mouse_scroll', mouseScroll);
+        this.#commands.set('mouse_drag', mouseDrag);
+        this.#commands.set('screen_shot_clipboard', screenshotToClipboard);
     }
 
     async StartPolling()

@@ -130,4 +130,143 @@ async function keyboardSendKey(cmd: KeyboardSendKeyCommand, jref: ReturnData) : 
     }
 }
 
-module.exports = {takeScreenShot, moveMouse, mouseClick, keyboardSendText, keyboardSendKey}
+type MouseScrollCommand = MouseMoveCommand & {
+    direction: 'up' | 'down' | 'left' | 'right',
+    amount: number,
+    delay: number
+}
+
+type MouseDragCommand = Command & {
+    startX: number,
+    startY: number,
+    endX: number,
+    endY: number,
+    duration: number,
+    delay: number
+}
+
+class DesktopActions
+{
+    static requireInteger(value: number, name: string, min: number, max: number): void
+    {
+        if (!Number.isInteger(value) || value < min || value > max)
+            throw new Error(`${name} must be an integer between ${min} and ${max}`);
+    }
+
+    static validatePoint(x: number, y: number): void
+    {
+        this.requireInteger(x, 'x', -2147483648, 2147483647);
+        this.requireInteger(y, 'y', -2147483648, 2147483647);
+    }
+
+    static async scroll(cmd: MouseScrollCommand, jret: ReturnData): Promise<void>
+    {
+        this.validatePoint(cmd.x, cmd.y);
+        this.requireInteger(cmd.amount, 'amount', 1, 100);
+        this.requireInteger(cmd.delay, 'delay', 0, 10000);
+        const actions = { up: () => mouse.scrollUp(cmd.amount), down: () => mouse.scrollDown(cmd.amount),
+            left: () => mouse.scrollLeft(cmd.amount), right: () => mouse.scrollRight(cmd.amount) };
+        if (!Object.prototype.hasOwnProperty.call(actions, cmd.direction))
+            throw new Error('direction must be up, down, left, or right');
+        await mouse.setPosition(new Point(cmd.x / displayScale, cmd.y / displayScale));
+        await delay(30);
+        await actions[cmd.direction]();
+        await delay(cmd.delay);
+    }
+
+    static async drag(cmd: MouseDragCommand, jret: ReturnData): Promise<void>
+    {
+        this.validatePoint(cmd.startX, cmd.startY);
+        this.validatePoint(cmd.endX, cmd.endY);
+        this.requireInteger(cmd.duration, 'duration', 100, 10000);
+        this.requireInteger(cmd.delay, 'delay', 0, 10000);
+        await mouse.setPosition(new Point(cmd.startX / displayScale, cmd.startY / displayScale));
+        await delay(30);
+        try {
+            await mouse.pressButton(Button.LEFT);
+            await delay(100);
+            await this.dragPath(cmd);
+            await delay(100);
+        }
+        finally { await mouse.releaseButton(Button.LEFT); }
+        await delay(cmd.delay);
+    }
+
+    private static async dragPath(cmd: MouseDragCommand): Promise<void>
+    {
+        const steps = Math.max(1, Math.ceil(cmd.duration / 20));
+        const startTime = Date.now();
+        for (let step = 1; step <= steps; step++) {
+            await delay(Math.max(0, startTime + cmd.duration * step / steps - Date.now()));
+            const x = cmd.startX + (cmd.endX - cmd.startX) * step / steps;
+            const y = cmd.startY + (cmd.endY - cmd.startY) * step / steps;
+            await mouse.setPosition(new Point(x / displayScale, y / displayScale));
+        }
+    }
+
+    static async screenshotToClipboard(cmd: ScreenShotCommand, jret: ReturnData): Promise<void>
+    {
+        this.requireInteger(cmd.delay, 'delay', 0, 10000);
+        await delay(cmd.delay);
+        const image = await screenshot({ format: 'png' });
+        await ClipboardImageWriter.write(image);
+        jret.msg = 'Screenshot copied to the Windows clipboard as an image. Paste with Ctrl+V in an application that accepts images.';
+    }
+}
+
+class ClipboardImageWriter
+{
+    // A short-lived STA process publishes a persistent Windows bitmap clipboard format.
+    // Image bytes go over stdin, not the command line; no temporary screenshot files.
+    private static readonly script = `
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$stream = $null; $image = $null; $bitmap = $null
+try {
+    $bytes = [Convert]::FromBase64String([Console]::In.ReadToEnd())
+    $stream = [System.IO.MemoryStream]::new($bytes, $false)
+    $image = [System.Drawing.Image]::FromStream($stream)
+    $bitmap = [System.Drawing.Bitmap]::new($image)
+    $data = [System.Windows.Forms.DataObject]::new()
+    $data.SetImage($bitmap)
+    [System.Windows.Forms.Clipboard]::SetDataObject($data, $true, 10, 100)
+    if (-not [System.Windows.Forms.Clipboard]::ContainsImage()) { throw 'Clipboard does not contain an image' }
+}
+catch { [Console]::Error.WriteLine($_.Exception.ToString()); exit 1 }
+finally {
+    if ($bitmap) { $bitmap.Dispose() }
+    if ($image) { $image.Dispose() }
+    if ($stream) { $stream.Dispose() }
+}`;
+
+    static async write(image: Buffer): Promise<void>
+    {
+        const { spawn } = require('node:child_process') as typeof import('node:child_process');
+        const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-STA', '-Command', this.script],
+            { windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] });
+        await new Promise<void>((resolve, reject) => {
+            let stderr = '';
+            const timer = setTimeout(() => {
+                child.kill();
+                reject(new Error('Timed out copying screenshot to clipboard'));
+            }, 15000);
+            child.stderr.on('data', data => { stderr = (stderr + data.toString()).slice(-8000); });
+            child.on('error', error => { clearTimeout(timer); reject(error); });
+            child.stdin.on('error', error => { child.kill(); clearTimeout(timer); reject(error); });
+            child.on('close', code => {
+                clearTimeout(timer);
+                if (code === 0) resolve();
+                else reject(new Error(`Clipboard copy failed (${code}): ${stderr}`));
+            });
+            child.stdin.end(image.toString('base64'));
+        });
+    }
+}
+
+module.exports = {
+    takeScreenShot, moveMouse, mouseClick, keyboardSendText, keyboardSendKey,
+    mouseScroll: DesktopActions.scroll.bind(DesktopActions),
+    mouseDrag: DesktopActions.drag.bind(DesktopActions),
+    screenshotToClipboard: DesktopActions.screenshotToClipboard.bind(DesktopActions)
+}
