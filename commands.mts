@@ -1,6 +1,6 @@
-const screenshot = require('screenshot-desktop') as typeof import('screenshot-desktop');
-const { keyboard, mouse, Point, Button, Key } = require('@nut-tree-fork/nut-js') as typeof import('@nut-tree-fork/nut-js');
-const koffi = require('koffi') as typeof import('koffi');
+import screenshot from 'screenshot-desktop';
+import { keyboard, mouse, Point, Button, Key } from '@nut-tree-fork/nut-js';
+import koffi from 'koffi';
 
 const user32 = koffi.load('user32.dll');
 const shcore = koffi.load('shcore.dll');
@@ -77,7 +77,7 @@ async function  delay(time: number) : Promise<void>
     await wait;
 }
 
-async function takeScreenShot(cmd: ScreenShotCommand, jret: ReturnData)
+export async function takeScreenShot(cmd: ScreenShotCommand, jret: ReturnData)
 {
     await delay(cmd.delay);
     const image = await screenshot({ format: 'png' });
@@ -86,12 +86,12 @@ async function takeScreenShot(cmd: ScreenShotCommand, jret: ReturnData)
     jret.msg = '';
 }
 
-async function moveMouse(cmd: MouseMoveCommand, jref: ReturnData) :Promise<void>
+export async function moveMouse(cmd: MouseMoveCommand, jref: ReturnData) :Promise<void>
 {
     await mouse.setPosition(new Point(cmd.x/displayScale, cmd.y/displayScale));
 }
 
-async function mouseClick(cmd: MouseClickCommand, jref: ReturnData) :Promise<void>
+export async function mouseClick(cmd: MouseClickCommand, jref: ReturnData) :Promise<void>
 {
     await mouse.setPosition(new Point(cmd.x/displayScale, cmd.y/displayScale));
     await delay(30);
@@ -99,13 +99,13 @@ async function mouseClick(cmd: MouseClickCommand, jref: ReturnData) :Promise<voi
     await delay(cmd.delay);    
 }
 
-async function keyboardSendText(cmd: KeyboardSendStringCommand, jref: ReturnData) : Promise<void>
+export async function keyboardSendText(cmd: KeyboardSendStringCommand, jref: ReturnData) : Promise<void>
 {
     keyboard.config.autoDelayMs = 10;
     await keyboard.type(cmd.text);
 }
 
-async function keyboardSendKey(cmd: KeyboardSendKeyCommand, jref: ReturnData) : Promise<void>
+export async function keyboardSendKey(cmd: KeyboardSendKeyCommand, jref: ReturnData) : Promise<void>
 {    
     const keys: KeyValue[] = [];
     if (cmd.ctrlKey) keys.push(Key.LeftControl);
@@ -145,7 +145,7 @@ type MouseDragCommand = Command & {
     delay: number
 }
 
-class DesktopActions
+export class DesktopActions
 {
     static requireInteger(value: number, name: string, min: number, max: number): void
     {
@@ -155,15 +155,15 @@ class DesktopActions
 
     static validatePoint(x: number, y: number): void
     {
-        this.requireInteger(x, 'x', -2147483648, 2147483647);
-        this.requireInteger(y, 'y', -2147483648, 2147483647);
+        DesktopActions.requireInteger(x, 'x', -2147483648, 2147483647);
+        DesktopActions.requireInteger(y, 'y', -2147483648, 2147483647);
     }
 
     static async scroll(cmd: MouseScrollCommand, jret: ReturnData): Promise<void>
     {
-        this.validatePoint(cmd.x, cmd.y);
-        this.requireInteger(cmd.amount, 'amount', 1, 100);
-        this.requireInteger(cmd.delay, 'delay', 0, 10000);
+        DesktopActions.validatePoint(cmd.x, cmd.y);
+        DesktopActions.requireInteger(cmd.amount, 'amount', 1, 10000);
+        DesktopActions.requireInteger(cmd.delay, 'delay', 0, 10000);
         const actions = { up: () => mouse.scrollUp(cmd.amount), down: () => mouse.scrollDown(cmd.amount),
             left: () => mouse.scrollLeft(cmd.amount), right: () => mouse.scrollRight(cmd.amount) };
         if (!Object.prototype.hasOwnProperty.call(actions, cmd.direction))
@@ -176,16 +176,16 @@ class DesktopActions
 
     static async drag(cmd: MouseDragCommand, jret: ReturnData): Promise<void>
     {
-        this.validatePoint(cmd.startX, cmd.startY);
-        this.validatePoint(cmd.endX, cmd.endY);
-        this.requireInteger(cmd.duration, 'duration', 100, 10000);
-        this.requireInteger(cmd.delay, 'delay', 0, 10000);
+        DesktopActions.validatePoint(cmd.startX, cmd.startY);
+        DesktopActions.validatePoint(cmd.endX, cmd.endY);
+        DesktopActions.requireInteger(cmd.duration, 'duration', 100, 10000);
+        DesktopActions.requireInteger(cmd.delay, 'delay', 0, 10000);
         await mouse.setPosition(new Point(cmd.startX / displayScale, cmd.startY / displayScale));
         await delay(30);
         try {
             await mouse.pressButton(Button.LEFT);
             await delay(100);
-            await this.dragPath(cmd);
+            await DesktopActions.dragPath(cmd);
             await delay(100);
         }
         finally { await mouse.releaseButton(Button.LEFT); }
@@ -206,7 +206,7 @@ class DesktopActions
 
     static async screenshotToClipboard(cmd: ScreenShotCommand, jret: ReturnData): Promise<void>
     {
-        this.requireInteger(cmd.delay, 'delay', 0, 10000);
+        DesktopActions.requireInteger(cmd.delay, 'delay', 0, 10000);
         await delay(cmd.delay);
         const image = await screenshot({ format: 'png' });
         await ClipboardImageWriter.write(image);
@@ -214,7 +214,7 @@ class DesktopActions
     }
 }
 
-class ClipboardImageWriter
+export class ClipboardImageWriter
 {
     // A short-lived STA process publishes a persistent Windows bitmap clipboard format.
     // Image bytes go over stdin, not the command line; no temporary screenshot files.
@@ -242,8 +242,8 @@ finally {
 
     static async write(image: Buffer): Promise<void>
     {
-        const { spawn } = require('node:child_process') as typeof import('node:child_process');
-        const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-STA', '-Command', this.script],
+        const { spawn } = await import('node:child_process');
+        const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-STA', '-Command', ClipboardImageWriter.script],
             { windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] });
         await new Promise<void>((resolve, reject) => {
             let stderr = '';
@@ -264,9 +264,3 @@ finally {
     }
 }
 
-module.exports = {
-    takeScreenShot, moveMouse, mouseClick, keyboardSendText, keyboardSendKey,
-    mouseScroll: DesktopActions.scroll.bind(DesktopActions),
-    mouseDrag: DesktopActions.drag.bind(DesktopActions),
-    screenshotToClipboard: DesktopActions.screenshotToClipboard.bind(DesktopActions)
-}

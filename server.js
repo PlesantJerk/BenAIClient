@@ -9,7 +9,9 @@ const { ConsoleShell } = require('./console-shell.js')
 const { setTimeout: delay } = require('node:timers/promises');
 const { stringify } = require('node:querystring');
 const { takeScreenShot, mouseClick, moveMouse, keyboardSendKey, keyboardSendText,
-    mouseScroll, mouseDrag, screenshotToClipboard } = require('./commands.ts');
+    mouseScroll, screenshotToClipboard, DesktopActions } = require('./commands.mts');
+/** @type {typeof import('./desktop-tools.mts')} */
+const { DesktopCommands } = require('./desktop-tools.mts');
 
 
 class Server
@@ -50,13 +52,19 @@ class Server
         this.#commands.set('mouse_click', mouseClick);
         this.#commands.set('send_text', keyboardSendText);
         this.#commands.set('send_key', keyboardSendKey);
-        this.#commands.set('mouse_scroll', mouseScroll);
-        this.#commands.set('mouse_drag', mouseDrag);
-        this.#commands.set('screen_shot_clipboard', screenshotToClipboard);
+        this.#commands.set('mouse_scroll', DesktopActions.scroll);
+        this.#commands.set('mouse_drag', DesktopActions.drag);
+        this.#commands.set('screen_shot_clipboard', DesktopActions.screenshotToClipboard);
+        this.#commands.set('window_list', DesktopCommands.windowList);
+        this.#commands.set('window_activate', DesktopCommands.windowActivate);
+        this.#commands.set('window_set_bounds', DesktopCommands.windowSetBounds);
+        this.#commands.set('mouse_double_click', DesktopCommands.mouseDoubleClick);
+        this.#commands.set('clipboard_get_text', DesktopCommands.clipboardGetText);
+        this.#commands.set('clipboard_set_text', DesktopCommands.clipboardSetText);
     }
 
     async StartPolling()
-    {
+    {        
         var cnt = 0;
         while(true)
         {
