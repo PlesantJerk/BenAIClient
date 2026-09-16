@@ -331,8 +331,13 @@ class Server
 
     async #GetFiles(sJson, jRet)
     {
-        var sPath = this.#MapPath(sJson.path);        
-        jRet.files = this.#GetFilesFromPath(sPath);        
+        var sPath = this.#MapPath(sJson.path);    
+        if (this.#directoryExists(sPath))    
+            jRet.files = this.#GetFilesFromPath(sPath);        
+        else {
+            jRet.success = false;
+            jRet.msg = "Invalid directory: " + sJson.path;
+        }
     }
 
     async #GetLocalFile(sJson, jRet)
