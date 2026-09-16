@@ -12,6 +12,9 @@ const { takeScreenShot, mouseClick, moveMouse, keyboardSendKey, keyboardSendText
     mouseScroll, screenshotToClipboard, DesktopActions } = require('./commands.mts');
 /** @type {typeof import('./desktop-tools.mts')} */
 const { DesktopCommands } = require('./desktop-tools.mts');
+/** @type {typeof import('./project-picker.mts')} */
+const { ProjectPicker } = require('./project-picker.mts');
+const { GlobalConfig } = require('./ai-config.mts');
 
 
 class Server
@@ -31,6 +34,9 @@ class Server
         this.root_dir = config.root_dir;
         this.conversation_location = config.conversation_location;
         this.#commands = new Map();
+        const projectPicker = new ProjectPicker(GlobalConfig, () => this.root_dir);
+        this.#commands.set('project_picker_config', projectPicker.configuration.bind(projectPicker));
+        this.#commands.set('project_picker_search', projectPicker.search.bind(projectPicker));
         this.#commands.set("select_new_directory", this.#selectNewDirectory.bind(this));
         this.#commands.set("get_directories", this.#GetDirectories.bind(this));
         this.#commands.set("get_files", this.#GetFiles.bind(this));
