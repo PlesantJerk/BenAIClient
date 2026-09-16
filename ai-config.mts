@@ -1,6 +1,6 @@
 import { defineConfig } from "./configsetup.mts";
 
-const config=defineConfig({
+const GlobalConfing=defineConfig({
     projects: [
         {
             comment: "This is the client for the AI Web Site (benai.org)",
