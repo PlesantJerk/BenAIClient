@@ -18,11 +18,17 @@ export const GlobalConfig = defineConfig({
             path: "F:/Code/node/quore_projects/workflow_example/apps/vue_all"
         },
         {
-            comment: "documentation/skills",
-            name: "doc",
+            comment: "docs & skills",
+            name: "sk",
             path: "F:/Code/node/quore_projects/workflow_example/documentation"
-        }
+        },
+        {
+            comment: "database",
+            name: "db",
+            path: "F:/Code/node/quore_projects/mysql"
+        },
+
     ],
-    at_file_extensions: ["cs", "ts", "js", "razor", "vue", "mts", "cjs"],
-    exclude_directories: [".*", "node_modules"]
+    at_file_extensions: ["cs", "ts", "js", "razor", "vue", "mts", "cjs", "sql"],
+    exclude_directories: [".*", "node_modules", "dist"]
 });
