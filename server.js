@@ -30,7 +30,7 @@ class Server
     constructor(config)
     {
         this.#session_id = Date.now();
-        this.#client_name = (GlobalConfig.client_name ?? "").trim().toLowerCase() || "default";
+        this.SetClientName(config.client_name);
         this.#sEmail = config.email;
         this.#CShell = new ConsoleShell();
         this.root_dir = config.root_dir;
@@ -69,6 +69,18 @@ class Server
         this.#commands.set('mouse_double_click', DesktopCommands.mouseDoubleClick);
         this.#commands.set('clipboard_get_text', DesktopCommands.clipboardGetText);
         this.#commands.set('clipboard_set_text', DesktopCommands.clipboardSetText);
+    }
+
+    static NormalizeClientName(client_name)
+    {
+        return (client_name ?? '').trim().toLowerCase() || 'default';
+    }
+
+    get client_name() { return this.#client_name; }
+
+    SetClientName(client_name)
+    {
+        this.#client_name = Server.NormalizeClientName(client_name);
     }
 
     async StartPolling()
@@ -402,6 +414,7 @@ class Server
 
 class ServerConfig
 {
+    client_name = 'default';
     email = 'blicht10069@gmail.com';
     root_dir = 'D:\\code\\git\\Phone\\ChatAblaze\\LLMAccess';
     conversation_location = 'd:\\temp\\conversations'

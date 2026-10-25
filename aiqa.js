@@ -42,6 +42,18 @@ const commands = new Map();
             });
 
         
+        commands.set('name', async (args)=>
+            {
+                if (args !== '')
+                {
+                    const client_name = Server.NormalizeClientName(args);
+                    await fsp.writeFile('./config.json', JSON.stringify({ ...host_config, client_name }), 'utf-8');
+                    host_config.client_name = client_name;
+                    host.SetClientName(client_name);
+                }
+                console.log('current name: ', host.client_name);
+            });
+
         rl.on('line', on_line_entered);
 
         host.StartPolling().then(()=>console.log('done')).catch((r)=>console.log('error:', r));

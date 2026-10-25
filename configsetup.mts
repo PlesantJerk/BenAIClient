@@ -1,6 +1,4 @@
 export type AIConfig = {
-    /** Stable routing name; blank or default uses the legacy client queue. */
-    client_name?: string,
     projects?:
         {
             name: string,

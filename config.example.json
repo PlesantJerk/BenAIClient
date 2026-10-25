@@ -1,5 +1,6 @@
 {
     "email":"",
+    "client_name":"default",
     "root_dir":"c:\\temp",
     "conversation_location":"c:\\temp\\conversations"
 }

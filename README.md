@@ -17,6 +17,8 @@ then to run just
 
 note: you can change the dir once you run the aiqa using the `cd [path]` command
 
+Use `name` to display the current client routing name, `name FooBar` to save and use `foobar`, or `name DEFAULT` to reset to `default`. Names are trimmed/lowercased and stored as `client_name` in `config.json`, not `ai-config.mts`. A rename applies to subsequent polls without restarting; an already pending poll keeps its old name.
+
 ## Prompt project autocomplete
 
 The Blazor Home prompt can request project metadata and name searches through the existing client connection. These commands are UI helpers, not new LLM tools.
