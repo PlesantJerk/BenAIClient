@@ -25,10 +25,12 @@ class Server
     conversation_location = '.';
     root_dir = '.';
     #session_id;
+    #client_name;
 
     constructor(config)
     {
         this.#session_id = Date.now();
+        this.#client_name = (GlobalConfig.client_name ?? "").trim().toLowerCase() || "default";
         this.#sEmail = config.email;
         this.#CShell = new ConsoleShell();
         this.root_dir = config.root_dir;
@@ -101,7 +103,7 @@ class Server
 
     async #Poll()
     {        
-        var resp = await fetch(`https://benai.org/debugger_hook?id=${this.#sEmail}&session_id=${this.#session_id}`, { method: 'get' });        
+        var resp = await fetch(`https://benai.org/debugger_hook?id=${encodeURIComponent(this.#sEmail)}&session_id=${this.#session_id}&client_name=${encodeURIComponent(this.#client_name)}`, { method: 'get' });
         var req = await resp.json();        
         for(var cmd of req)
         {
