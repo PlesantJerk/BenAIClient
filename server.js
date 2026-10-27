@@ -14,6 +14,8 @@ const { takeScreenShot, mouseClick, moveMouse, keyboardSendKey, keyboardSendText
 const { DesktopCommands } = require('./desktop-tools.mts');
 /** @type {typeof import('./project-picker.mts')} */
 const { ProjectPicker } = require('./project-picker.mts');
+/** @type {typeof import('./mcp-authorization-url.mts')} */
+const { McpAuthorizationCommands } = require('./mcp-authorization-url.mts');
 const { GlobalConfig } = require('./ai-config.mts');
 
 
@@ -36,6 +38,8 @@ class Server
         this.root_dir = config.root_dir;
         this.conversation_location = config.conversation_location;
         this.#commands = new Map();
+        const mcpAuthorization = new McpAuthorizationCommands();
+        this.#commands.set('mcp_open_authorization_url', mcpAuthorization.openAuthorizationUrl.bind(mcpAuthorization));
         const projectPicker = new ProjectPicker(GlobalConfig, () => this.root_dir);
         this.#commands.set('project_picker_config', projectPicker.configuration.bind(projectPicker));
         this.#commands.set('project_picker_search', projectPicker.search.bind(projectPicker));
