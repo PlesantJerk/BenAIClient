@@ -1,6 +1,7 @@
 import screenshot from 'screenshot-desktop';
 import { keyboard, mouse, Point, Button, Key } from '@nut-tree-fork/nut-js';
 import koffi from 'koffi';
+import { execFileSync } from 'node:child_process';
 
 type KeyValue = import('@nut-tree-fork/nut-js').Key;
 type Command = {
@@ -43,11 +44,23 @@ type KeyboardSendKeyCommand = Command & {
 
 function getPrimaryDisplayScale(): number
 {
-    if (process.platform !== 'win32')
+    if (process.platform !== 'win32' && process.platform !== 'darwin')
         return 1;
 
     try
     {
+        if (process.platform === 'darwin')
+        {
+            // Convert screenshot backing pixels to native mouse coordinates in points.
+            const output = execFileSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e',
+                'ObjC.import("AppKit"); $.NSScreen.screens.objectAtIndex(0).backingScaleFactor;'],
+                { encoding: 'utf8', timeout: 5000 });
+            const scale = Number(output.trim());
+            if (!Number.isFinite(scale) || scale <= 0)
+                throw new Error(`Could not read macOS display scale: ${output.trim()}`);
+            return scale;
+        }
+
         const user32 = koffi.load('user32.dll');
         const shcore = koffi.load('shcore.dll');
         const monitorFromWindow = user32.func(
