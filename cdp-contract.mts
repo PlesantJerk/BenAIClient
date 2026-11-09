@@ -368,7 +368,7 @@ export class CdpContract {
 
     static target(value:unknown): CdpJsonObject {
         const t=this.object(value);
-        if(t.kind==='element') {this.only(t,['kind','elementId','documentId','frameId']);return {kind:'element',elementId:this.token(t.elementId),documentId:this.token(t.documentId),frameId:this.token(t.frameId)};}
+        if(t.kind==='element') {this.only(t,['kind','elementId','documentId','frameId']);return {kind:'element',elementId:this.token(t.elementId),documentId:this.token(t.documentId),frameId:this.nullToken(t.frameId??null)};}
         this.only(t,['kind','strategy','value','name','exact','frameId','withinElementId']);
         if(t.kind!=='locator'||!['role','testId','label','placeholder','text','css'].includes(t.strategy as string)) this.fail('Unsupported target kind or strategy.');
         if(t.strategy!=='role'&&t.name!=null) this.fail('Only role targets accept name.');
