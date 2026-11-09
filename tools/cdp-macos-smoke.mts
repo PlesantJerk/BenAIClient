@@ -12,14 +12,15 @@ import type {CdpClientResponse} from '../cdp-client.mts';
 
 // Embedding smoke only. No main/poller, production route/config, downloads or provider delivery.
 class CdpMacosSmoke {
-    static readonly #runtimeCheckpoint='657ab5622548ddbff3e9bae79dedbcc92ce26be2';
+    static readonly #platformBaseCheckpoint='657ab5622548ddbff3e9bae79dedbcc92ce26be2';
+    static readonly #navigationSourceCheckpoint='0e70d4a64b66fd994c30d6e29c67591a20f831b4';
     static readonly #initial=['GetCapabilities','CreateSession','GetSessions','CreatePage','GetPages','CloseSession','GetCall','GetAction','Navigate','Observe','Screenshot','ReadArtifact'];
     static readonly #frozen:Readonly<Record<string,string>>=Object.freeze({
         'cdp-platform.mts':'869c12c7d16e06ac006d0ed36355ed7d3d6c2cc5b954c412b9a845af5ba6504d',
         'cdp-posix-private.mts':'2bce46f8c33f48e6eeedaaa9ef022cc4960ad54888d33f330aca36d09b24b57a',
         'cdp-bootstrap.mts':'34e2037669ec0478a114c306d97b36cb1f4de04e0c51f175bdd67ede8e1a6e8a',
         'cdp-private-directory.mts':'4a470a2e818621c147f9db960709f023e1741b325d49982969262295468d2bc6',
-        'cdp-browser.mts':'a16d5fe7faf0dd6beca7487c9680be57195bff0f541388d18241aa6c0eb37342',
+        'cdp-browser.mts':'23e1cf9e0c5280937a223b169caf8a16c4d8ddf871be17b8d8b882266263578f',
         'cdp-client.mts':'0e29d3428fbc8eb9d6b1e716cbd01994b37d455cc2516687fdcb1daeeaf9c5ff'
     });
     readonly #root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
@@ -83,7 +84,7 @@ class CdpMacosSmoke {
     #verifyCheckout():void{
         const head=this.#git(['rev-parse','HEAD']).trim();assert.equal(head,this.#expectedCommit,'Checkout is not the explicitly reviewed commit.');
         assert.equal(this.#git(['status','--porcelain=v1','--untracked-files=normal']).trim(),'','Require a clean isolated checkout, not an existing live-client checkout.');
-        this.#report.checkout={root:this.#root,commit:head,runtimeSourceCheckpoint:CdpMacosSmoke.#runtimeCheckpoint};
+        this.#report.checkout={root:this.#root,commit:head,platformBaseCheckpoint:CdpMacosSmoke.#platformBaseCheckpoint,navigationSourceCheckpoint:CdpMacosSmoke.#navigationSourceCheckpoint};
         this.#report.sourceHashesBefore=this.#sourceHashes();
     }
     async #load():Promise<void>{

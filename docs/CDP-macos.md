@@ -2,7 +2,7 @@
 
 **Prepared for review, not native-executed.** This is an embedding-only smoke check for the initial client port, not the main client, poller, server/provider integration, model image delivery, privacy certification, or a full-platform port.
 
-Runtime source checkpoint: `657ab5622548ddbff3e9bae79dedbcc92ce26be2`. The fixture checks the six reviewed runtime byte hashes as well as an explicitly supplied, exact checkout commit containing the reviewed fixture. Do not substitute an arbitrary branch tip for that reviewed commit.
+Base macOS platform checkpoint: `657ab5622548ddbff3e9bae79dedbcc92ce26be2`. Navigation source provenance: `0e70d4a64b66fd994c30d6e29c67591a20f831b4` (Windows CDP hotfix). Only its typed `CdpFramesError` import and `Navigate` body are carried forward; the Mac browser file retains its platform code and has its own combined byte hash. These provenance commits are not a single combined checkout or native-Mac acceptance. The fixture checks the reviewed combined runtime byte hashes and still requires an explicitly supplied, exact reviewed checkout commit containing these updates. Do not substitute an arbitrary branch tip for that reviewed commit.
 
 ## Supported initial 12
 
