@@ -1,11 +1,13 @@
 import * as fs from 'node:fs';
+import {CdpPlatform} from './cdp-platform.mts';
+import {CdpPosixPrivateFiles} from './cdp-posix-private.mts';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { CdpContractError } from './cdp-contract.mts';
 import type { CdpDirectoryGuard } from './cdp-store.mts';
 
 // Only this dedicated root may be hardened. Never changes an existing directory or a parent ACL.
-// Windows implementation is exercised by the owned fixture. Other platforms deliberately fail closed.
+// Windows ACL semantics remain; macOS verifies current uid and exact POSIX modes. Other platforms fail closed.
 export class CdpPrivateDirectoryPolicy implements CdpDirectoryGuard {
     readonly #root: string;
     constructor(root: string) {
@@ -14,7 +16,7 @@ export class CdpPrivateDirectoryPolicy implements CdpDirectoryGuard {
         this.#assertAncestors(this.#root, true);
     }
     createFresh(): void {
-        if (process.platform !== 'win32') throw new CdpContractError('PRIVATE_PLATFORM_UNSUPPORTED', 'Private storage policy is currently Windows only.');
+        CdpPlatform.assertSupported();
         if (fs.existsSync(this.#root)) throw new CdpContractError('PRIVATE_DIRECTORY_EXISTS', 'Fresh private root already exists; no ACL changes were made.');
         fs.mkdirSync(this.#root, { mode: 0o700 });
         this.#hardenFresh(this.#root);
@@ -28,14 +30,14 @@ export class CdpPrivateDirectoryPolicy implements CdpDirectoryGuard {
             this.createFresh();
             const descriptor=fs.openSync(marker,'wx',0o600);
             try {fs.writeFileSync(descriptor,JSON.stringify(expected));fs.fsyncSync(descriptor);}finally{fs.closeSync(descriptor);}
-            this.#powershell(`$d=New-Object System.Security.AccessControl.FileSecurity;$d.SetAccessRuleProtection($true,$false);$d.SetOwner($sid);foreach($s in @($sid,[System.Security.Principal.SecurityIdentifier]'S-1-5-18')){$d.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($s,'FullControl','Allow')))};Set-Acl -LiteralPath $p -AclObject $d;`,marker);
+            this.assertPrivateFile(marker,true);
         }
         // Existing roots are only read/verified. Missing or mismatched markers are never repaired.
         this.assertPrivateDirectory(this.#root);
         let stat:fs.Stats;
         try {stat=fs.lstatSync(marker);}catch {throw new CdpContractError('PRIVATE_MARKER_INVALID','An existing installation requires its verified marker; no state was repaired.');}
         if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1||stat.size<1||stat.size>4096)throw new CdpContractError('PRIVATE_MARKER_INVALID','Installation marker must be an ordinary bounded unaliased file.');
-        this.#powershell(`$a=Get-Acl -LiteralPath $p;if(-not $a.AreAccessRulesProtected -or $a.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value){throw 'owner'};$seen=@();foreach($r in $a.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])){if($r.AccessControlType -ne 'Allow' -or @($sid.Value,'S-1-5-18') -notcontains $r.IdentityReference.Value -or $r.FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl -or $r.InheritanceFlags -ne 'None' -or $r.PropagationFlags -ne 'None'){throw 'rule'};$seen+=$r.IdentityReference.Value};if($seen -notcontains $sid.Value -or $seen -notcontains 'S-1-5-18'){throw 'missing'};`,marker);
+        this.assertPrivateFile(marker,false);
         if(fs.readFileSync(marker,'utf8')!==JSON.stringify(expected))throw new CdpContractError('PRIVATE_MARKER_INVALID','Installation marker does not match this captured route.');
     }
     openInstallationChild(name:'journal'|'images'|'observations'|'downloads'):string {
@@ -62,7 +64,7 @@ export class CdpPrivateDirectoryPolicy implements CdpDirectoryGuard {
         this.#hardenFresh(full);this.assertPrivateDirectory(full);
     }
     assertPrivateDirectory(directory: string): void {
-        if (process.platform !== 'win32') throw new CdpContractError('PRIVATE_PLATFORM_UNSUPPORTED', 'Private storage policy is currently Windows only.');
+        CdpPlatform.assertSupported();
         const full = path.resolve(directory);
         if (!this.contains(full)) throw new CdpContractError('UNSAFE_STORAGE_PATH', 'Directory is outside the dedicated private root.');
         this.#assertAncestors(full, false);
@@ -77,6 +79,7 @@ export class CdpPrivateDirectoryPolicy implements CdpDirectoryGuard {
         this.assertPrivateDirectory(path.dirname(full));
         const stat=fs.lstatSync(full);
         if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1)throw new CdpContractError('UNSAFE_STORAGE_PATH','Private file must be ordinary and unaliased.');
+        if(process.platform==='darwin'){if(fresh)CdpPosixPrivateFiles.initializeFresh(full,false);else CdpPosixPrivateFiles.assertPath(full,false);return;}
         if(fresh)this.#powershell(`$d=New-Object System.Security.AccessControl.FileSecurity;$d.SetAccessRuleProtection($true,$false);$d.SetOwner($sid);foreach($s in @($sid,[System.Security.Principal.SecurityIdentifier]'S-1-5-18')){$d.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($s,'FullControl','Allow')))};Set-Acl -LiteralPath $p -AclObject $d;`,full);
         this.#powershell(`$a=Get-Acl -LiteralPath $p;if(-not $a.AreAccessRulesProtected -or $a.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value){throw 'owner'};$seen=@();foreach($r in $a.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])){if($r.AccessControlType -ne 'Allow' -or @($sid.Value,'S-1-5-18') -notcontains $r.IdentityReference.Value -or $r.FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl -or $r.InheritanceFlags -ne 'None' -or $r.PropagationFlags -ne 'None'){throw 'rule'};$seen+=$r.IdentityReference.Value};if($seen -notcontains $sid.Value -or $seen -notcontains 'S-1-5-18'){throw 'missing'};`,full);
     }
@@ -85,12 +88,14 @@ export class CdpPrivateDirectoryPolicy implements CdpDirectoryGuard {
         return relative === '' || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative));
     }
     #hardenFresh(directory: string): void {
+        if(process.platform==='darwin'){CdpPosixPrivateFiles.initializeFresh(directory,true);return;}
         this.#powershell(`$d = New-Object System.Security.AccessControl.DirectorySecurity; $d.SetAccessRuleProtection($true,$false); $d.SetOwner($sid);
             foreach($s in @($sid,[System.Security.Principal.SecurityIdentifier]'S-1-5-18')) {
                 $r = New-Object System.Security.AccessControl.FileSystemAccessRule($s,'FullControl','ContainerInherit,ObjectInherit','None','Allow'); $d.AddAccessRule($r);
             }; Set-Acl -LiteralPath $p -AclObject $d;`,directory);
     }
     #verifyAcl(directory: string, root: boolean): void {
+        if(process.platform==='darwin'){CdpPosixPrivateFiles.assertPath(directory,true);return;}
         this.#powershell(`$a = Get-Acl -LiteralPath $p; if ($a.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value) { throw 'owner'; }
             if (${root ? '$true' : '$false'} -and -not $a.AreAccessRulesProtected) { throw 'inheritance'; }
             $rules = @($a.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])); $own = $false; $system = $false;

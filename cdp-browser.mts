@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import {CdpPlatform} from './cdp-platform.mts';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fork, execFileSync } from 'node:child_process';
@@ -41,7 +42,7 @@ export interface CdpBrowserSettings {
 }
 export interface CdpOwnedCleanup { readonly browserExited: boolean; readonly hostExited: boolean; readonly generatedProfileRemoved: boolean; readonly privateTemporaryRootRemoved: boolean; }
 
-// Separate owned Node host gives Playwright a private TEMP/TMP without mutating global environment.
+// Separate owned Node host gives Playwright a private TEMP/TMP (and macOS TMPDIR) without mutating global environment.
 // Public BrowserServer.process() and its public spawnargs prove only resources created by this host.
 class CdpBrowserHost {
     #server: BrowserServer | null = null;
@@ -50,6 +51,8 @@ class CdpBrowserHost {
     #launchAttempted=false;
     #temporaryRoot:string|null=null;
     static run(): void {
+        // This is the dedicated owned host, never the main client. Chromium inherits private creation modes.
+        if(process.platform==='darwin')process.umask(0o077);
         const host = new CdpBrowserHost();
         process.on('message', message => { void host.#message(message).catch(error => host.#failure(error)); });
         process.on('disconnect', () => { void host.#close().catch(() => { process.exitCode = 1; }); });
@@ -314,17 +317,23 @@ export class CdpBrowserSession {
     get cleanupEvidence(): CdpOwnedCleanup | null { return this.#cleanup; }
     static libraryVersion(): string { return createRequire(import.meta.url)('playwright-core/package.json').version; }
     static executableVersion(executable: string): string | null {
+        if(process.platform==='darwin')return this.#macExecutableVersion(executable);
         if (process.platform !== 'win32') return null;
         const script = `[Console]::Write((Get-Item -LiteralPath '${executable.replaceAll("'","''")}').VersionInfo.FileVersion)`;
         try { return execFileSync('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{encoding:'utf8',timeout:10000,windowsHide:true,maxBuffer:4096,stdio:['ignore','pipe','pipe']}).trim(); }
         catch { return null; }
     }
+    static #macExecutableVersion(executable:string):string|null {
+        const plist=path.resolve(path.dirname(executable),'..','Info.plist');
+        try {return execFileSync('/usr/libexec/PlistBuddy',['-c','Print :CFBundleShortVersionString',plist],{encoding:'utf8',timeout:10000,maxBuffer:4096,stdio:['ignore','pipe','pipe']}).trim()||null;}
+        catch{return null;}
+    }
     async launch(): Promise<void> {
         if (this.#options.headless !== true) throw new CdpContractError('HEADFUL_UNSUPPORTED', 'Only explicitly isolated headless sessions are supported.');
-        if (process.platform !== 'win32') throw new CdpContractError('BROWSER_PLATFORM_UNVERIFIED', 'This slice has not been validated on this platform.');
+        CdpPlatform.assertSupported();
         this.#temporaryRoot = this.#settings.privatePolicy.createChild('browser-' + this.id);
         // Installed Node24 fork forwards these public spawn options unchanged (owned compatibility probe).
-        const options:ForkOptions & Pick<CommonSpawnOptions,'windowsHide'>={execArgv:[],env:{...process.env,TEMP:this.#temporaryRoot,TMP:this.#temporaryRoot,PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD:'1'},stdio:['ignore','ignore','ignore','ipc'],windowsHide:true};
+        const options:ForkOptions & Pick<CommonSpawnOptions,'windowsHide'>={execArgv:[],env:CdpPlatform.childEnvironment(process.platform,process.env,this.#temporaryRoot),stdio:['ignore','ignore','ignore','ipc'],windowsHide:true};
         this.#host = fork(fileURLToPath(import.meta.url),['--cdp-owned-host'],options);
         this.#host.on('message',message => this.#receive(message));
         this.#host.on('error',() => this.#rejectWaiters('BROWSER_HOST_UNAVAILABLE'));

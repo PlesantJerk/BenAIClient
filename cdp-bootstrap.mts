@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import {CdpPlatform} from './cdp-platform.mts';
 import { createHash } from 'node:crypto';
 import { CdpContract, CdpContractError, CdpLimits } from './cdp-contract.mts';
 import type { CdpClientIdentity, CdpJsonObject } from './cdp-contract.mts';
@@ -34,19 +35,18 @@ export class CdpClientBootstrap {
     open(route:CdpConfiguredRoute):CdpOwnedRuntime {
         const clientName=CdpContract.clientName(route.clientName),email=route.email?.trim().toLowerCase();
         if(!email||email.length>512)throw new CdpContractError('CLIENT_CONFIGURATION_INVALID','Existing routing email is required; no new credentials were created.');
-        const parent=this.#options.storageParent ?? process.env.LOCALAPPDATA;
-        if(process.platform!=='win32'||!parent||!path.isAbsolute(parent))throw new CdpContractError('PRIVATE_PLATFORM_UNSUPPORTED','Automatic private storage currently requires the Windows local application directory.');
+        const parent=CdpPlatform.storageParent(this.#options.storageParent);
         const digest=createHash('sha256').update(CdpContract.canonical({clientName,email})).digest('hex');
         const root=path.join(parent,'BenAI-CDP-v1-'+digest.slice(0,32));
         // Reserve headroom for Playwright's generated profile and Chromium child paths on Windows.
-        if(path.join(root,'browser-00000000-0000-4000-8000-000000000000').length>180)throw new CdpContractError('BROWSER_PROFILE_PATH_LIMIT','Private browser path exceeds the conservative Windows startup budget; no browser was launched.');
+        if(process.platform==='win32'&&path.join(root,'browser-00000000-0000-4000-8000-000000000000').length>180)throw new CdpContractError('BROWSER_PROFILE_PATH_LIMIT','Private browser path exceeds the conservative Windows startup budget; no browser was launched.');
         const policy=new CdpPrivateDirectoryPolicy(root);
         policy.openInstallation(clientName,digest);
         const journal=policy.openInstallationChild('journal'),images=policy.openInstallationChild('images'),observationDirectory=policy.openInstallationChild('observations'),downloadDirectory=policy.openInstallationChild('downloads');
         const store=new CdpStore({directory:journal,clientName,directoryGuard:policy,limits:this.#options.limits});
         try {
             const artifacts=new CdpArtifacts(images,store,policy,{observationDirectory,downloadDirectory});
-            const manager=new CdpClientManager({store,artifacts,browser:{privatePolicy:policy,...(route.rootDirectory?{virtualRoot:path.resolve(route.rootDirectory)}:{}),executablePath:this.#options.executablePath ?? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',...(this.#options.fixtureOrigin ? {fixtureOrigin:this.#options.fixtureOrigin} : {})}});
+            const manager=new CdpClientManager({store,artifacts,browser:{privatePolicy:policy,...(route.rootDirectory?{virtualRoot:path.resolve(route.rootDirectory)}:{}),executablePath:CdpPlatform.installedChrome(this.#options.executablePath),...(this.#options.fixtureOrigin ? {fixtureOrigin:this.#options.fixtureOrigin} : {})}});
             return new CdpOwnedRuntime(store,manager);
         } catch(error) {store.close();throw error;}
     }
