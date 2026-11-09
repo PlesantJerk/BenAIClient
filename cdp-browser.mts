@@ -29,7 +29,7 @@ import {CdpReload} from './cdp-reload.mts';
 import {CdpImageTarget} from './cdp-image-target.mts';
 import {CdpSessionDownloads} from './cdp-download-capture.mts';
 import type {CdpArtifacts} from './cdp-artifacts.mts';
-import {CdpFrames} from './cdp-frames.mts';
+import {CdpFrames,CdpFramesError} from './cdp-frames.mts';
 import type {CdpFrameSelection} from './cdp-frames.mts';
 import {CdpPageObservation} from './cdp-page-observation.mts';
 
@@ -250,7 +250,22 @@ export class CdpBrowserPage {
     owns(page:Page):boolean{return page===this.#page;}
     get closed(): boolean { return this.#page.isClosed(); }
     describe():CdpJsonObject{const dialog=this.dialogs.describeActive();return {pageId:this.id,documentId:this.documentId,documentProof:'last cached Targets proof; null when unavailable',...this.#inventory,available:!this.closed&&this.#initialized,initializationError:this.#initializationError,automaticallyOpened:this.automaticallyOpened,earlyNetworkCoverage:this.automaticallyOpened?'partial; capture began after public context page event':'registered before application navigation',pendingDialog:dialog?{...dialog}:null,predicateExecution:this.predicateState(),network:this.#network?.describe() as CdpJsonObject??null,mainFrameId:this.mainFrameId,elementHandleDisposalFailures:this.#targets.disposalFailures};}
-    async navigate(args:any):Promise<CdpJsonObject>{this.#assertLive();await this.#page.goto(args.url,{waitUntil:args.waitUntil,timeout:args.timeoutMs});const selection=await this.resolveFrame(null);await this.refreshInventory();return {documentId:selection.describe().documentId,navigationFinished:true};}
+    async navigate(args:any):Promise<CdpJsonObject> {
+        this.#assertLive();
+        // Native failure remains uncertain. Never replay navigation to recover a later observation.
+        await this.#page.goto(args.url,{waitUntil:args.waitUntil,timeout:args.timeoutMs});
+        const outcome:CdpJsonObject={navigationFinished:true,inputMechanicsOnly:true,businessSuccessVerified:false,documentId:null};
+        let stage='document';
+        try {
+            const descriptor=(await this.resolveFrame(null)).describe();stage='inventory';
+            const inventory=await this.refreshInventory();outcome.documentId=descriptor.documentId;
+            outcome.postNavigationObservation={state:descriptor.documentId===null?'unavailable':'available',errorCode:descriptor.documentError,inventoryState:inventory.metadataState??null};
+        } catch(error) {
+            const errorCode=error instanceof CdpFramesError||error instanceof CdpContractError?error.code:'POST_NAVIGATION_OBSERVATION_FAILED';
+            outcome.postNavigationObservation={state:'unavailable',failedStage:stage,errorCode};
+        }
+        return outcome;
+    }
     observe(args:any,access:'owner'|'parentInspect'='owner'):Promise<CdpJsonObject>{if(args.options.cursor===null)this.#assertLive();return this.#observation.read(args,access);}
     async screenshot(args:any):Promise<{bytes:Buffer;metadata:any}> {
         this.#assertLive();const options=args.options;
