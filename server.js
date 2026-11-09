@@ -17,6 +17,7 @@ const { ProjectPicker } = require('./project-picker.mts');
 /** @type {typeof import('./mcp-authorization-url.mts')} */
 const { McpAuthorizationCommands } = require('./mcp-authorization-url.mts');
 const { GlobalConfig } = require('./ai-config.mts');
+const { CdpClientBridge } = require('./cdp-bridge.mts');
 
 
 class Server
@@ -28,12 +29,14 @@ class Server
     root_dir = '.';
     #session_id;
     #client_name;
+    #cdpBridge;
 
     constructor(config)
     {
         this.#session_id = Date.now();
         this.SetClientName(config.client_name);
         this.#sEmail = config.email;
+        this.#cdpBridge = new CdpClientBridge({ route: () => ({clientName:this.#client_name,email:this.#sEmail,rootDirectory:this.root_dir}), handleSignals:true });
         this.#CShell = new ConsoleShell();
         this.root_dir = config.root_dir;
         this.conversation_location = config.conversation_location;
@@ -123,6 +126,13 @@ class Server
         var req = await resp.json();        
         for(var cmd of req)
         {
+            if (CdpClientBridge.isCdpCandidate(cmd))
+            {
+                const id = CdpClientBridge.replyId(cmd);
+                const reply = await this.#cdpBridge.handle(cmd);
+                if (id !== null) await this.Reply(id, reply);
+                continue;
+            }
             console.log('------------------', new Date().toLocaleString(), '------------------');
             console.log('incomming command: ', cmd);
             var cb = this.#commands.get(cmd.command);
