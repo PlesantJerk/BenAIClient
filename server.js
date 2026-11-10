@@ -18,6 +18,9 @@ const { ProjectPicker } = require('./project-picker.mts');
 const { McpAuthorizationCommands } = require('./mcp-authorization-url.mts');
 const { GlobalConfig } = require('./ai-config.mts');
 const { CdpClientBridge } = require('./cdp-bridge.mts');
+const { CdpProducer, CdpDiagnosticTransport } = require('./cdp-provenance.mts');
+const { CdpCommandPublication } = require('./cdp-publication.mts');
+const { CdpLocalDiagnosticSink } = require('./cdp-local-diagnostics.mts');
 
 
 class Server
@@ -30,13 +33,19 @@ class Server
     #session_id;
     #client_name;
     #cdpBridge;
+    #cdpProducer;
+    #cdpPublication;
 
     constructor(config)
     {
         this.#session_id = Date.now();
         this.SetClientName(config.client_name);
         this.#sEmail = config.email;
-        this.#cdpBridge = new CdpClientBridge({ route: () => ({clientName:this.#client_name,email:this.#sEmail,rootDirectory:this.root_dir}), handleSignals:true });
+        const localDiagnostics = CdpLocalDiagnosticSink.shared;
+        this.#cdpBridge = new CdpClientBridge({ route: () => ({clientName:this.#client_name,email:this.#sEmail,rootDirectory:this.root_dir}), handleSignals:true, diagnostic:record=>localDiagnostics.record(record) });
+        this.#cdpProducer = new CdpProducer(() => this.#client_name);
+        const diagnostics = new CdpDiagnosticTransport({producer:this.#cdpProducer,localDropped:()=>Math.min(2147483647,localDiagnostics.droppedRecords+this.#cdpBridge.diagnosticFailures)});
+        this.#cdpPublication = new CdpCommandPublication({diagnostics});
         this.#CShell = new ConsoleShell();
         this.root_dir = config.root_dir;
         this.conversation_location = config.conversation_location;
@@ -122,15 +131,14 @@ class Server
 
     async #Poll()
     {        
-        var resp = await fetch(`https://benai.org/debugger_hook?id=${encodeURIComponent(this.#sEmail)}&session_id=${this.#session_id}&client_name=${encodeURIComponent(this.#client_name)}`, { method: 'get' });
+        var resp = await fetch(`https://benai.org/debugger_hook?id=${encodeURIComponent(this.#sEmail)}&session_id=${this.#session_id}&client_name=${encodeURIComponent(this.#client_name)}${this.#cdpProducer.pollQuery()}`, { method: 'get' });
         var req = await resp.json();        
         for(var cmd of req)
         {
             if (CdpClientBridge.isCdpCandidate(cmd))
             {
-                const id = CdpClientBridge.replyId(cmd);
-                const reply = await this.#cdpBridge.handle(cmd);
-                if (id !== null) await this.Reply(id, reply);
+                try { await this.#cdpPublication.execute(cmd, this.#cdpBridge); }
+                catch { this.#cdpPublication.unexpectedFailure(cmd); }
                 continue;
             }
             console.log('------------------', new Date().toLocaleString(), '------------------');
