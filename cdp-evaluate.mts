@@ -31,6 +31,7 @@ interface CdpEvaluateResolvedTarget {
 
 export interface CdpEvaluateReceipt {
     outcome: 'returned' | 'javascript-error' | 'execution-error';
+    postExecutionCleanup?:{complete:boolean;errors:{stage:string;code:string}[];};
     pageId: string;
     frameId?: string;
     userFunctionInvoked?: false;
@@ -54,6 +55,9 @@ export interface CdpEvaluateReceipt {
     };
     error?: { code: string; message: string; name?: string };
 }
+
+/** Internal owning-operation sink. It records progress, never grants settlement or replay. */
+export interface CdpEvaluateProgress { nativeEvaluationReceipt(receipt:CdpEvaluateReceipt):void; }
 
 export class CdpEvaluateError extends Error {
     readonly code: string;
@@ -94,14 +98,14 @@ export class CdpEvaluator {
     }
 
     /** The returned promise settles only when the actual CDP evaluation settles. Never retry after a caller deadline. */
-    evaluate(request: CdpEvaluateRequest, target?:CdpEvaluateFrameTarget): Promise<CdpEvaluateReceipt> {
+    evaluate(request: CdpEvaluateRequest, target?:CdpEvaluateFrameTarget,progress?:CdpEvaluateProgress): Promise<CdpEvaluateReceipt> {
         const input = this.preflight(request,target!==undefined);
         this.assertReady();
         const resolved=target===undefined?null:this.resolveTarget(target,request.frameId);
         const context = this.context!;
         const documentId = this.documentId();
         this.inFlight++;
-        const work=resolved?this.executeFrame(input,resolved):this.execute(input,context.uniqueId,documentId);
+        const work=resolved?this.executeFrame(input,resolved,progress):this.execute(input,context.uniqueId,documentId,undefined,progress);
         return work.finally(() => { this.inFlight--; });
     }
 
@@ -236,7 +240,8 @@ export class CdpEvaluator {
             probeKey:'__cdp_evaluate_probe_'+randomUUID(),probeValue:randomUUID(),afterDocumentId:null};
     }
 
-    private async executeFrame(input:object,target:CdpEvaluateResolvedTarget):Promise<CdpEvaluateReceipt> {
+    private async executeFrame(input:object,target:CdpEvaluateResolvedTarget,progress?:CdpEvaluateProgress):Promise<CdpEvaluateReceipt> {
+        let receipt:CdpEvaluateReceipt|null=null;
         try {
             await target.selection.assertCurrent();
             if(target.frame.isDetached())throw new CdpEvaluateError('EVALUATE_FRAME_DETACHED','Selected Frame detached before harness binding.');
@@ -244,13 +249,16 @@ export class CdpEvaluator {
             if(installed!==true)throw new CdpEvaluateError('EVALUATE_DOCUMENT_PROOF','Exact document marker is unavailable, stale, accessor-backed or mutable; no user source dispatched.');
             const uniqueId=await this.findFrameContext(target);
             await this.session!.send('Runtime.releaseObjectGroup',{objectGroup:this.objectGroup});
-            return await this.execute({...input,documentGuard:{documentKey:target.documentKey,documentId:target.documentId,probeKey:target.probeKey,probeValue:target.probeValue}},uniqueId,target.documentId,target);
+            receipt=await this.execute({...input,documentGuard:{documentKey:target.documentKey,documentId:target.documentId,probeKey:target.probeKey,probeValue:target.probeValue}},uniqueId,target.documentId,target,progress);
+            return receipt;
         } finally {
             // Harness-only cleanup remains conditional inside the document, even if public Frame.evaluate observes a replacement.
-            try {
-                if(!target.frame.isDetached()&&!this.owner.page.isClosed())await target.frame.evaluate(CdpEvaluator.removeFrameProbe,this.probeInput(target));
-            } finally {
-                if(this.session&&!this.owner.page.isClosed())await this.session.send('Runtime.releaseObjectGroup',{objectGroup:this.objectGroup});
+            if(receipt){
+                await this.cleanupReceipt(receipt,'frame-probe',async()=>{if(!target.frame.isDetached()&&!this.owner.page.isClosed())await target.frame.evaluate(CdpEvaluator.removeFrameProbe,this.probeInput(target));});
+                await this.cleanupReceipt(receipt,'object-group',async()=>{if(this.session&&!this.owner.page.isClosed())await this.session.send('Runtime.releaseObjectGroup',{objectGroup:this.objectGroup});});
+            }else{
+                try{if(!target.frame.isDetached()&&!this.owner.page.isClosed())await target.frame.evaluate(CdpEvaluator.removeFrameProbe,this.probeInput(target));}
+                finally{if(this.session&&!this.owner.page.isClosed())await this.session.send('Runtime.releaseObjectGroup',{objectGroup:this.objectGroup});}
             }
         }
     }
@@ -342,21 +350,42 @@ export class CdpEvaluator {
             throw new CdpEvaluateError('EVALUATE_ARGUMENT_BUDGET', 'Serialized Arguments exceed 32768 chars / 65536 UTF8 bytes.');
     }
 
-    private async execute(input: object, uniqueContextId: string, documentIdBefore: string | null,target?:CdpEvaluateResolvedTarget): Promise<CdpEvaluateReceipt> {
+    private async execute(input:object,uniqueContextId:string,before:string|null,target?:CdpEvaluateResolvedTarget,progress?:CdpEvaluateProgress):Promise<CdpEvaluateReceipt> {
+        let reply;
         try {
-            const reply = await this.session!.send('Runtime.callFunctionOn', {
-                functionDeclaration: CdpEvaluator.browserEvaluate.toString(), uniqueContextId,
-                arguments: [{ value: input }], awaitPromise: true, returnByValue: true,
-                generatePreview: false, userGesture: false, objectGroup: this.objectGroup,
+            reply=await this.session!.send('Runtime.callFunctionOn',{
+                functionDeclaration:CdpEvaluator.browserEvaluate.toString(),uniqueContextId,
+                arguments:[{value:input}],awaitPromise:true,returnByValue:true,
+                generatePreview:false,userGesture:false,objectGroup:this.objectGroup,
             });
-            await this.session!.send('Runtime.releaseObjectGroup', { objectGroup: this.objectGroup });
-            if(target){try{target.afterDocumentId=(await target.selection.assertCurrent()).documentId;}catch{target.afterDocumentId=null;}}
-            if (reply.exceptionDetails) return this.receipt(documentIdBefore, { outcome: 'execution-error', error: { code: 'EVALUATE_WRAPPER_EXCEPTION', message: 'Browser wrapper failed after execution may have begun; no rollback or retry.' } },target);
-            if (typeof reply.result.value !== 'string') return this.receipt(documentIdBefore, { outcome: 'execution-error', error: { code: 'EVALUATE_VALUE_UNAVAILABLE', message: 'No bounded by-value browser receipt was available.' } },target);
-            return this.decode(reply.result.value, documentIdBefore,target);
-        } catch (error) {
-            return this.receipt(documentIdBefore, { outcome: 'execution-error', error: { code: 'EVALUATE_EXECUTION_UNCERTAIN', message: this.errorMessage(error) } },target);
-        }
+        }catch(error){return this.receipt(before,{outcome:'execution-error',error:{code:'EVALUATE_EXECUTION_UNCERTAIN',message:this.errorMessage(error)}},target);}
+        const receipt=this.decodeReply(reply,before,target);
+        // Publish a decoded native milestone BEFORE optional document reads or object/probe cleanup.
+        // A durable-progress failure propagates; it must not be disguised as a browser exception.
+        if(receipt.outcome==='returned'||receipt.outcome==='javascript-error')progress?.nativeEvaluationReceipt(receipt);
+        await this.observeDocument(receipt,target);
+        await this.cleanupReceipt(receipt,'object-group',async()=>{await this.session!.send('Runtime.releaseObjectGroup',{objectGroup:this.objectGroup});});
+        return receipt;
+    }
+    private decodeReply(reply:any,before:string|null,target?:CdpEvaluateResolvedTarget):CdpEvaluateReceipt {
+        if(reply.exceptionDetails)return this.receipt(before,{outcome:'execution-error',error:{code:'EVALUATE_WRAPPER_EXCEPTION',message:'Browser wrapper failed after execution may have begun; no rollback or retry.'}},target);
+        if(typeof reply.result?.value!=='string')return this.receipt(before,{outcome:'execution-error',error:{code:'EVALUATE_VALUE_UNAVAILABLE',message:'No bounded by-value browser receipt was available.'}},target);
+        try{return this.decode(reply.result.value,before,target);}
+        catch(error){return this.receipt(before,{outcome:'execution-error',error:{code:'EVALUATE_EXECUTION_UNCERTAIN',message:this.errorMessage(error)}},target);}
+    }
+    private async observeDocument(receipt:CdpEvaluateReceipt,target?:CdpEvaluateResolvedTarget):Promise<void> {
+        if(!target)return;
+        try{target.afterDocumentId=(await target.selection.assertCurrent()).documentId;}
+        catch{target.afterDocumentId=null;}
+        receipt.documentIdAfter=target.afterDocumentId;
+        receipt.documentChanged=receipt.documentIdBefore===null||target.afterDocumentId===null?null:receipt.documentIdBefore!==target.afterDocumentId;
+    }
+
+    private async cleanupReceipt(receipt:CdpEvaluateReceipt,stage:string,cleanup:()=>Promise<void>):Promise<void> {
+        const status=receipt.postExecutionCleanup??={complete:true,errors:[]};
+        try{await cleanup();}
+        catch{status.complete=false;status.errors.push({stage,code:'EVALUATE_CLEANUP_FAILED'});}
+        // Native receipt is retained; failed cleanup is not proof the user function is still executing.
     }
 
     private decode(text: string, before: string | null,target?:CdpEvaluateResolvedTarget): CdpEvaluateReceipt {

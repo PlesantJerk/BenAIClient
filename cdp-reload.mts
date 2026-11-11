@@ -200,7 +200,8 @@ export class CdpReload {
     #tryComplete(work: ReloadWork): void {
         if (work.finished || !work.acknowledged || !work.before || !work.after || !work.observed[work.args.waitUntil]) return;
         try {
-            this.#assertPage(work.args.pageId); const documentId = this.#owner.getDocumentId?.() ?? null;
+            this.#assertPage(work.args.pageId); let documentId:string|null=null;
+            try{documentId=this.#owner.getDocumentId?.()??null;}catch{/* Optional owner sample cannot erase acknowledged native lifecycle completion. */}
             const receipt: CdpReloadReceipt = {pageId: this.#pageId, documentId, documentIdSource: 'owner sample only; core document refresh remains authoritative',
                 before: {documentId: work.beforeDocumentId, url: work.beforeUrl, native: {...work.before}}, after: {documentId, url: this.#page.url().slice(0, 4096), native: {...work.after}},
                 waitUntil: work.args.waitUntil, observed: {...work.observed}, bypassCacheRequested: work.args.bypassCache,

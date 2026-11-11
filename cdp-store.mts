@@ -25,7 +25,16 @@ export interface CdpReceiptReference {
 export interface CdpDialogControlMetadata {readonly dialogId:string;readonly pageId:string;readonly originCallId:string|null;readonly originActionId:string|null;}
 // Runtime owner reference, never a model/transport field. The owner checks its exact active public Dialog.
 export interface CdpDialogControlOwner {assertDialogControl(sessionId:string,pageId:string,dialogId:string):CdpDialogControlMetadata;}
+export interface CdpNativeCompletion {
+    readonly stage:'native-completion';
+    readonly outcome:'returned'|'javascript-error'|'closed';
+    readonly observedAtUtc:string;
+    readonly sideEffectsMayHaveOccurred:true;
+    readonly businessSuccessVerified:false;
+    readonly replayAllowed:false;
+}
 export interface CdpEvidence {
+    readonly nativeCompletion?:CdpNativeCompletion;
     readonly dialog?:CdpDialogControlMetadata;
     readonly sessionId?: string;
     readonly pageId?: string;
@@ -364,17 +373,19 @@ export class CdpStore {
         });
     }
 
-    complete(reference: CdpReceiptReference, caller: CdpContext, evidence: CdpEvidence = {}): CdpJournalEntry {
-        const safe = this.#evidence(evidence);
+    complete(reference: CdpReceiptReference, caller: CdpContext, evidence: CdpEvidence = {}, errorCode:string|null=null): CdpJournalEntry {
+        const safe = this.#evidence(evidence); this.#nullCode(errorCode);
+        if(errorCode!==null&&!safe.nativeCompletion)throw new CdpContractError('INVALID_EVIDENCE','Settled failure requires explicit native execution evidence.');
         return this.#transaction('outcome', () => {
             const row = this.#required(reference);
             this.#authorize(row, caller, false); this.#assertCurrentBinding(caller); this.#assertRich(row);
             if (row.state !== 'dispatchStarted' && row.state !== 'uncertain') throw new CdpContractError('INVALID_TRANSITION', 'Authoritative completion requires prior durable dispatch.');
             if(row.operation==='HandleDialog'&&(CdpContract.canonical(safe.dialog??null)!==CdpContract.canonical(JSON.parse(row.evidence_json??'{}').dialog??null)||!safe.dialog))throw new CdpContractError('INVALID_EVIDENCE','Dialog outcome must retain the same exact accepted control identity.');
             if(row.operation!=='HandleDialog'&&safe.dialog)throw new CdpContractError('INVALID_EVIDENCE','Dialog outcome is restricted to its control operation.');
-            this.#applyResourceOutcome(row, safe);
+            // A settled failed wrapper retains native proof, but does not certify required resource cleanup.
+            if(errorCode===null)this.#applyResourceOutcome(row, safe);
             this.#validateEvidenceArtifacts(row, safe);
-            this.#db.prepare("UPDATE receipts SET state='completed',completed_ms=?,evidence_json=?,error_code=NULL WHERE call_id=?").run(this.#now(), CdpContract.canonical(safe), row.call_id);
+            this.#db.prepare("UPDATE receipts SET state='completed',completed_ms=?,evidence_json=?,error_code=? WHERE call_id=?").run(this.#now(), CdpContract.canonical(safe), errorCode, row.call_id);
             return this.#entry(this.#required(reference));
         });
     }
@@ -447,8 +458,9 @@ export class CdpStore {
     }
 
     #evidence(value: CdpEvidence): CdpEvidence {
-        const o = CdpContract.object(value); CdpContract.only(o, ['dialog', 'sessionId', 'pageId', 'artifactIds', 'counts', 'target', 'watch', 'pageClose', 'destinationTarget']);
-        const result: {dialog?:CdpDialogControlMetadata;pageClose?:CdpEvidence['pageClose'];destinationTarget?:CdpEvidence['destinationTarget']; watch?: CdpEvidence['watch']; sessionId?: string; pageId?: string; artifactIds?: string[]; counts?: Record<string, number>; target?: {elementId:string;documentId:string;frameId:string;}; } = {};
+        const o = CdpContract.object(value); CdpContract.only(o, ['nativeCompletion','dialog', 'sessionId', 'pageId', 'artifactIds', 'counts', 'target', 'watch', 'pageClose', 'destinationTarget']);
+        const result: {nativeCompletion?:CdpNativeCompletion;dialog?:CdpDialogControlMetadata;pageClose?:CdpEvidence['pageClose'];destinationTarget?:CdpEvidence['destinationTarget']; watch?: CdpEvidence['watch']; sessionId?: string; pageId?: string; artifactIds?: string[]; counts?: Record<string, number>; target?: {elementId:string;documentId:string;frameId:string;}; } = {};
+        if(o.nativeCompletion!==undefined)result.nativeCompletion=this.#nativeCompletion(o.nativeCompletion);
         if(o.dialog!==undefined){const d=CdpContract.object(o.dialog,['dialogId','pageId','originCallId','originActionId']);result.dialog={dialogId:CdpContract.token(d.dialogId),pageId:CdpContract.token(d.pageId),originCallId:d.originCallId===null?null:CdpContract.uuid(d.originCallId),originActionId:CdpContract.nullToken(d.originActionId)};}
         if(o.pageClose!==undefined){const proof=CdpContract.object(o.pageClose,['pageId','closed']);if(proof.closed!==true)throw new CdpContractError('INVALID_EVIDENCE','Only verified page closure is accepted.');result.pageClose={pageId:CdpContract.token(proof.pageId),closed:true};}
         if(o.destinationTarget!==undefined){const t=CdpContract.object(o.destinationTarget,['elementId','documentId','frameId']);result.destinationTarget={elementId:CdpContract.token(t.elementId),documentId:CdpContract.token(t.documentId),frameId:CdpContract.token(t.frameId)};}
@@ -466,6 +478,24 @@ export class CdpStore {
         }
         if (Buffer.byteLength(CdpContract.canonical(result)) > this.#limits.values.nonImageReplyBytes) throw new CdpContractError('EVIDENCE_LIMIT', 'Retained metadata exceeds its byte bound.');
         return CdpContract.freezeJson(result as CdpJsonObject) as CdpEvidence;
+    }
+
+    recordNativeCompletion(reference:CdpReceiptReference,caller:CdpContext,evidence:CdpEvidence):CdpJournalEntry {
+        const safe=this.#evidence(evidence);
+        if(!safe.nativeCompletion)throw new CdpContractError('INVALID_EVIDENCE','A proven native milestone is required.');
+        return this.#transaction('outcome',()=>{
+            const row=this.#required(reference);this.#authorize(row,caller,false);this.#assertCurrentBinding(caller);this.#assertRich(row);
+            if(!['dispatchStarted','uncertain'].includes(row.state))throw new CdpContractError('INVALID_TRANSITION','Native progress requires prior durable dispatch.');
+            this.#db.prepare('UPDATE receipts SET evidence_json=? WHERE call_id=?').run(CdpContract.canonical(safe),row.call_id);
+            return this.#entry(this.#required(reference));
+        });
+    }
+    #nativeCompletion(value:unknown):CdpNativeCompletion {
+        const o=CdpContract.object(value,['stage','outcome','observedAtUtc','sideEffectsMayHaveOccurred','businessSuccessVerified','replayAllowed']);
+        this.#timestamp(o.observedAtUtc);
+        if(o.stage!=='native-completion'||!['returned','javascript-error','closed'].includes(o.outcome as string)||o.sideEffectsMayHaveOccurred!==true||o.businessSuccessVerified!==false||o.replayAllowed!==false)
+            throw new CdpContractError('INVALID_EVIDENCE','Native milestone must not claim business success, replay permission or absence of side effects.');
+        return {...o} as unknown as CdpNativeCompletion;
     }
 
     get(reference: CdpReceiptReference, caller: CdpContext): CdpJournalEntry {

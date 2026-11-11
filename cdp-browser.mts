@@ -24,6 +24,7 @@ import type {CdpNetworkEvent,CdpNetworkOptions} from './cdp-network.mts';
 import type {CdpDialogControlMetadata} from './cdp-store.mts';
 import {CdpFiles} from './cdp-files.mts';
 import {CdpEvaluator} from './cdp-evaluate.mts';
+import type {CdpEvaluateProgress} from './cdp-evaluate.mts';
 import {CdpViewport} from './cdp-viewport.mts';
 import {CdpReload} from './cdp-reload.mts';
 import {CdpImageTarget} from './cdp-image-target.mts';
@@ -173,7 +174,7 @@ export class CdpBrowserPage {
     get viewport():CdpViewport{if(!this.#viewport)throw new CdpContractError('VIEWPORT_UNAVAILABLE','No owning viewport helper exists.');return this.#viewport;}
     async prepareEvaluation(frameId:string|null):Promise<{selection:CdpFrameSelection;documentKey:string}>{this.#assertLive();this.#assertNoPredicate();const selection=await this.resolveFrame(frameId);this.#assertNoPredicate();return {selection,documentKey:this.documentKey};}
     #assertNoPredicate():void{if(this.#predicateWork)throw new CdpContractError('PAGE_PREDICATE_PENDING','A real observational predicate promise is still pending; no caller-deadline cancellation is implied.');}
-    evaluate(args:any,target:{selection:CdpFrameSelection;documentKey:string}):Promise<any>{this.#assertLive();if(!this.#evaluator)throw new CdpContractError('EVALUATE_UNAVAILABLE','No owning evaluator exists.');return this.#evaluator.evaluate({pageId:this.id,script:args.script,arguments:args.arguments,frameId:args.frameId,maxResultChars:args.maxResultChars},target);}
+    evaluate(args:any,target:{selection:CdpFrameSelection;documentKey:string},progress?:CdpEvaluateProgress):Promise<any>{this.#assertLive();if(!this.#evaluator)throw new CdpContractError('EVALUATE_UNAVAILABLE','No owning evaluator exists.');return this.#evaluator.evaluate({pageId:this.id,script:args.script,arguments:args.arguments,frameId:args.frameId,maxResultChars:args.maxResultChars},target,progress);}
     async prepareFiles(args:any,paths:string[]):Promise<{selection:any;target:any|null;documentId:string;frameId:string}> {
         this.#assertLive();if(args.options.timeoutMs!==this.files.limits.timeoutMs)throw new CdpContractError('FILE_TIMEOUT_UNSUPPORTED','This native file helper supports its declared 10000ms timeout only; no supplied timeout is silently ignored.');
         const frameSelection=await this.resolveFrame(null),documentId=frameSelection.describe().documentId!,frameId=frameSelection.describe().frameId;
@@ -255,7 +256,10 @@ export class CdpBrowserPage {
         // Native failure remains uncertain. Never replay navigation to recover a later observation.
         await this.#page.goto(args.url,{waitUntil:args.waitUntil,timeout:args.timeoutMs});
         const outcome:CdpJsonObject={navigationFinished:true,inputMechanicsOnly:true,businessSuccessVerified:false,documentId:null};
-        let stage='document';
+        return outcome;
+    }
+    async observeAfterNavigation():Promise<CdpJsonObject> {
+        const outcome:CdpJsonObject={documentId:null};let stage='document';
         try {
             const descriptor=(await this.resolveFrame(null)).describe();stage='inventory';
             const inventory=await this.refreshInventory();outcome.documentId=descriptor.documentId;

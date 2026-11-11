@@ -4,14 +4,15 @@ import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { CdpContract, CdpContractError } from './cdp-contract.mts';
 import type { CdpCommand, CdpContext, CdpErrorEnvelope, CdpJsonObject, CdpReply, CdpWireCommand } from './cdp-contract.mts';
 import { CdpBrowserSession } from './cdp-browser.mts';
-import type { CdpBrowserSettings, CdpOwnedCleanup } from './cdp-browser.mts';
-import type { CdpJournalEntry, CdpStore } from './cdp-store.mts';
+import type { CdpBrowserPage, CdpBrowserSettings, CdpOwnedCleanup } from './cdp-browser.mts';
+import type { CdpEvidence, CdpNativeCompletion, CdpJournalEntry, CdpStore } from './cdp-store.mts';
 import { CdpArtifacts } from './cdp-artifacts.mts';
 import type { CdpImageTransfer } from './cdp-artifacts.mts';
 import {CdpDialogError} from './cdp-dialogs.mts';
 import {CdpNetworkError} from './cdp-network.mts';
 import {CdpFileError} from './cdp-files.mts';
 import {CdpEvaluateError} from './cdp-evaluate.mts';
+import type {CdpEvaluateReceipt} from './cdp-evaluate.mts';
 import {CdpViewportError} from './cdp-viewport.mts';
 import {CdpReloadError} from './cdp-reload.mts';
 import {CdpProjectFiles} from './cdp-project-files.mts';
@@ -49,6 +50,7 @@ class CdpNamedOperation {
         this.callId = command.callId; this.op = command.op; this.context = command.context; this.signature = signature;
         this.sessionId = command.sessionId; this.pageId = command.pageId;
     }
+    nativeEvaluationReceipt(receipt:CdpEvaluateReceipt):void {this.#manager.evaluationNativeReceipt(this.#command!,this,receipt);}
     start(): void { queueMicrotask(() => { void this.#run(); }); }
     async #run(): Promise<void> {
         try { await this.#manager.runOperation(this.#command!,this); }
@@ -148,14 +150,14 @@ export class CdpClientManager {
     }
     #lookup(command: CdpCommand, entry: CdpJournalEntry): CdpClientResponse {
         const operation = this.#operations.get(entry.callId);
-        const state = entry.receipt.state, successful = state === 'completed';
+        const state = entry.receipt.state;
         const result: CdpJsonObject = { originalCallId:entry.callId,originalOperation:entry.op,operationState:state,payloadExpired:entry.payloadExpired,
             mechanicsSettled:operation?.finished===true&&operation.context.clientIncarnationId===this.#store.clientIdentity.clientIncarnationId,
             evidence:entry.evidence as CdpJsonObject ?? null,uncertainty:entry.uncertainty as CdpJsonObject ?? null };
         if (operation?.result && !entry.payloadExpired){if(command.context.access==='parentInspect'&&operation.result.fillDiagnostic){const {fillDiagnostic,...retained}=operation.result;result.output=retained;}else result.output=operation.result;}
-        if(operation?.pageId&&operation.sessionId&&!entry.payloadExpired){const page=this.#sessions.get(operation.sessionId)?.pages().find(value=>value.id===operation.pageId);if(page)result.currentPageState=page.describe();}
+        if(operation?.pageId&&operation.sessionId&&!entry.payloadExpired){const page=this.#sessions.get(operation.sessionId)?.pages().find(value=>value.id===operation.pageId);if(page)result.currentPageState=this.#pageDescription(page);}
         const error = operation?.error ?? (entry.errorCode ? { code:entry.errorCode,message:'Retained operation did not produce a definitive successful completion.',phase:'journal',retryDisposition:'doNotRetry' as const,details:null } : null);
-        return this.#response(command,{result,error,entry,documentId:operation?.documentId ?? null,ok:successful || state === 'accepted' || state === 'dispatchStarted',redactLogs:operation?.redactLogs??true});
+        return this.#response(command,{result,error,entry,documentId:operation?.documentId ?? null,ok:state === 'completed'&&!error || state === 'accepted' || state === 'dispatchStarted',redactLogs:operation?.redactLogs??true});
     }
     #operationReply(command: CdpCommand, operation: CdpNamedOperation): CdpClientResponse {
         const result: CdpJsonObject = {originalCallId:operation.callId,originalOperation:operation.op,mechanicsSettled:operation.finished&&operation.context.clientIncarnationId===this.#store.clientIdentity.clientIncarnationId,operationState:operation.finished ? operation.error ? 'failed' : 'completed' : 'pending',output:operation.result};
@@ -231,8 +233,10 @@ export class CdpClientManager {
             try{operation.result=prepared?await prepared.dispatch():await page.navigate(command.args);}finally{end();}
             if(command.op==='Fill'&&operation.result.fillDiagnostic&&session.redact(command.args.value)!==command.args.value){const {fillDiagnostic,...retained}=operation.result;operation.result=retained;}
             operation.documentId=prepared?.identity.documentId??page.documentId;
-            operation.result={...operation.result,postAction:{page:page.describe(),inputMechanicsOnly:true}};
-            this.#store.complete(operation.entry!.reference,command.context,evidence);
+            this.#recordNative(command,operation,evidence);
+            if(command.op==='Navigate')await this.#navigationObservation(page,operation);
+            this.#postAction(page,operation);
+            this.#completeRecorded(command,operation);
             if(command.op==='Fill'&&operation.result.fillDiagnostic&&!operation.redactLogs)this.#diagnosticOwner?.ordinaryFill(command,operation.result.fillDiagnostic as CdpJsonObject,command.args.value as string);
         }finally{release();}
     }
@@ -243,12 +247,22 @@ export class CdpClientManager {
             this.#store.markDispatchStarted(operation.entry!.reference,command.context,'cdp.Runtime.callFunctionOn');
             const end=page.beginMechanicalInput(command.callId,command.actionId!,target.selection.describe().documentId,target.selection.describe().frameId);
             deadline=setTimeout(()=>this.#evaluateDeadline(command,operation),command.args.timeoutMs as number);
-            try{operation.result={evaluation:await page.evaluate(command.args,target) as unknown as CdpJsonObject};}finally{end();}
+            try{const evaluation=await page.evaluate(command.args,target,operation);operation.result={...operation.result,evaluation:evaluation as unknown as CdpJsonObject,evaluationPostWork:'settled'};}finally{end();}
             operation.documentId=target.selection.describe().documentId;
             const outcome=(operation.result.evaluation as CdpJsonObject).outcome;
-            if(outcome!=='returned')throw new CdpContractError(outcome==='javascript-error'?'EVALUATE_JAVASCRIPT_EXCEPTION':'EVALUATE_EXECUTION_UNCERTAIN','Page code may have applied effects; inspect retained evaluation result. No replay or rollback.');
-            this.#store.complete(operation.entry!.reference,command.context);operation.error=null;
+            if(outcome!=='returned'&&outcome!=='javascript-error')throw new CdpContractError('EVALUATE_EXECUTION_UNCERTAIN','Page code may have applied effects; inspect retained evaluation result. No replay or rollback.');
+            const code=outcome==='javascript-error'?'EVALUATE_JAVASCRIPT_EXCEPTION':null;
+            this.#completeRecorded(command,operation,code);
+            operation.error=code?this.#error(new CdpContractError(code,'Page function finished by throwing. Effects may have occurred; inspect the result before a new action. Never replay this identity.'),'execution'):null;
         }finally{if(deadline)clearTimeout(deadline);release();}
+    }
+    evaluationNativeReceipt(command:CdpCommand,operation:CdpNamedOperation,receipt:CdpEvaluateReceipt):void {
+        if(receipt.outcome!=='returned'&&receipt.outcome!=='javascript-error')throw new CdpContractError('INVALID_EVIDENCE','Only a decoded completed native function can publish progress.');
+        // Reply freezing must never freeze the evaluator receipt while post-native work still updates it.
+        const retained=CdpContract.cloneJson(receipt,0,new Set()) as CdpJsonObject;
+        operation.result={...operation.result,evaluation:retained,evaluationPostWork:'pending'};
+        operation.documentId=receipt.documentIdBefore;
+        this.#recordNative(command,operation,{},receipt.outcome);
     }
     #evaluateDeadline(command:CdpCommand,operation:CdpNamedOperation):void{
         try{const entry=this.#store.get(operation.entry!.reference,command.context);if(entry.receipt.state==='dispatchStarted')this.#store.finishWithoutCompletion(entry.reference,command.context,'uncertain','EVALUATE_DEADLINE_ELAPSED');operation.error={code:'EVALUATE_DEADLINE_ELAPSED',message:'The actual evaluation is still pending; inspect this original GetCall. No cancellation or retry occurred.',phase:'execution',retryDisposition:'doNotRetry',details:null};}
@@ -285,9 +299,10 @@ export class CdpClientManager {
                 const caller=page.reload.reload({pageId:page.id,...command.args} as any),mechanics=page.reload.pendingCompletion();
                 const notice=caller.catch(error=>{this.#reloadDeadline(command,operation,error);return null;});
                 let result;try{result=await(mechanics??caller);}finally{await notice;}
-                const selection=await page.resolveFrame(null);await page.refreshInventory();operation.documentId=selection.describe().documentId;
-                operation.result={...result,documentId:operation.documentId,after:{...result.after,documentId:operation.documentId},documentIdSource:'current core Targets proof after native completion',postAction:{page:page.describe(),inputMechanicsOnly:true}} as unknown as CdpJsonObject;
-                this.#store.complete(operation.entry!.reference,command.context);operation.error=null;
+                operation.result={...result} as unknown as CdpJsonObject;
+                this.#recordNative(command,operation);
+                await this.#navigationObservation(page,operation);this.#postAction(page,operation);
+                this.#completeRecorded(command,operation);operation.error=null;
             }finally{end();}
         }finally{release();}
     }
@@ -304,10 +319,38 @@ export class CdpClientManager {
             try{operation.result=await page.lifecycle.dispatch(command.op,command.args);}finally{end();}operation.documentId=page.documentId;
             if(command.op==='ClosePage'){
                 if(operation.result.pageId!==page.id||operation.result.pageClosed!==true||operation.result.closedVerified!==true||!page.closed)throw new CdpContractError('PAGE_CLOSE_UNVERIFIED','Exact owned page closure must be verified before releasing capacity.');
-                this.#store.complete(operation.entry!.reference,command.context,{pageClose:{pageId:page.id,closed:true}});
-            }else this.#store.complete(operation.entry!.reference,command.context);
-            operation.result={...operation.result,postAction:{page:page.describe(),inputMechanicsOnly:true}};
+                this.#recordNative(command,operation,{pageClose:{pageId:page.id,closed:true}},'closed');
+                try{operation.result={...operation.result,...await page.lifecycle.cleanupClosed()};}
+                catch(error){operation.result={...operation.result,postCloseCleanup:{complete:false,errorCode:this.#error(error,'cleanup').code}};throw error;}
+                this.#completeRecorded(command,operation);
+            }else this.#completeNative(command,operation);
+            this.#postAction(page,operation);
         }finally{release();}
+    }
+    #completeNative(command:CdpCommand,operation:CdpNamedOperation,evidence:CdpEvidence={},outcome:CdpNativeCompletion['outcome']='returned',errorCode:string|null=null):void {
+        this.#recordNative(command,operation,evidence,outcome);this.#completeRecorded(command,operation,errorCode);
+    }
+    #completeRecorded(command:CdpCommand,operation:CdpNamedOperation,errorCode:string|null=null):void {
+        const evidence=this.#store.get(operation.entry!.reference,command.context).evidence!;
+        this.#store.complete(operation.entry!.reference,command.context,evidence,errorCode);
+    }
+    #recordNative(command:CdpCommand,operation:CdpNamedOperation,evidence:CdpEvidence={},outcome:CdpNativeCompletion['outcome']='returned'):void {
+        const nativeCompletion:CdpNativeCompletion={stage:'native-completion',outcome,observedAtUtc:new Date().toISOString(),sideEffectsMayHaveOccurred:true,businessSuccessVerified:false,replayAllowed:false};
+        operation.result={...operation.result,nativeCompletion:{...nativeCompletion}};
+        this.#store.recordNativeCompletion(operation.entry!.reference,command.context,{...evidence,nativeCompletion});
+    }
+    async #navigationObservation(page:CdpBrowserPage,operation:CdpNamedOperation):Promise<void> {
+        const observation=await page.observeAfterNavigation();operation.documentId=observation.documentId as string|null;
+        operation.result={...operation.result,...observation};
+        if(operation.result.after&&operation.documentId!==null)operation.result.after={...operation.result.after as CdpJsonObject,documentId:operation.documentId};
+        if(operation.documentId!==null)operation.result.documentIdSource='current core Targets proof after native completion';
+    }
+    #pageDescription(page:CdpBrowserPage):CdpJsonObject {
+        try{return page.describe();}
+        catch(error){return {pageId:page.id,metadataState:'unavailable',failedStage:'page-description',errorCode:this.#error(error,'post-observation').code};}
+    }
+    #postAction(page:CdpBrowserPage,operation:CdpNamedOperation):void {
+        operation.result={...operation.result,postAction:{page:this.#pageDescription(page),inputMechanicsOnly:true}};
     }
     #closeDeadline(command: CdpCommand, operation: CdpNamedOperation): void {
         try {
@@ -342,6 +385,7 @@ export class CdpClientManager {
             try {
                 const current = this.#store.get(entry.reference,command.context);
                 if (current.receipt.state === 'accepted') this.#store.finishWithoutCompletion(entry.reference,command.context,'failedBeforeDispatch',classified.code);
+                else if(['dispatchStarted','uncertain'].includes(current.receipt.state)&&current.evidence?.nativeCompletion)this.#store.complete(entry.reference,command.context,current.evidence,classified.code);
                 else if (current.receipt.state === 'dispatchStarted') this.#store.finishWithoutCompletion(entry.reference,command.context,'uncertain',classified.code);
             } catch { return {code:'JOURNAL_OUTCOME_UNAVAILABLE',message:'Operation outcome could not be durably classified; inspect the retained dispatch state before any new input.',phase:'journal',retryDisposition:'doNotRetry',details:null}; }
         }

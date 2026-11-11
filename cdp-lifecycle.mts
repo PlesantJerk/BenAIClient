@@ -24,10 +24,13 @@ export class CdpPageLifecycle {
             catch(error){if(!this.#page.isClosed())throw new CdpContractError('PAGE_CLOSE_UNVERIFIED','Explicit owned page did not reach verified closed state; inspect pending dialog/action. No slot released.');throw error;}
         }
         if(!this.#page.isClosed())throw new CdpContractError('PAGE_CLOSE_UNVERIFIED','Owned page closure is not verified.');
-        // Cancel only this closed page's observations before awaiting native detach.
+        return {pageId:this.#owner.id,pageClosed:true,closedVerified:true,noOp:alreadyClosed,inputDispatched:!alreadyClosed,inputMethod:'playwright.page.close(runBeforeUnload=true)',applicationTransactionCancelled:false,businessSuccessVerified:false};
+    }
+    async cleanupClosed():Promise<CdpJsonObject> {
+        if(!this.#page.isClosed())throw new CdpContractError('PAGE_CLOSE_UNVERIFIED','Only the exact verified closed page can dispose its observations.');
         const observationCleanup=this.#owner.disposePageObservation();
         const networkCleanup=await this.#owner.disposeNetwork();
-        return {pageId:this.#owner.id,pageClosed:true,closedVerified:true,noOp:alreadyClosed,inputDispatched:!alreadyClosed,inputMethod:'playwright.page.close(runBeforeUnload=true)',observationCleanup,networkCleanup,applicationTransactionCancelled:false,businessSuccessVerified:false};
+        return {observationCleanup,networkCleanup};
     }
     async #resize(args:any):Promise<CdpJsonObject>{return await this.#owner.viewport.resize({pageId:this.#owner.id,...args}) as unknown as CdpJsonObject;}
     async metrics():Promise<CdpJsonObject>{return this.#page.evaluate(()=>({width:innerWidth,height:innerHeight,deviceScaleFactor:devicePixelRatio,scrollX,scrollY}));}
