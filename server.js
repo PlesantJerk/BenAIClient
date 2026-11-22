@@ -60,10 +60,14 @@ class Server
         this.#commands.set("get_files", this.#GetFiles.bind(this));
         this.#commands.set("read_file", this.#ReadFile.bind(this));
         this.#commands.set("write_file", this.#WriteFile.bind(this));
+        this.#commands.set("append_file", this.#AppendFile.bind(this));
         this.#commands.set("create_directory", this.#CreateDirectory.bind(this));
         this.#commands.set("record_message", this.#RecordMessage.bind(this));
         this.#commands.set("load_messages", this.#LoadMessages.bind(this));
-        this.#commands.set("get_virtual_directory_location", (sJson, jRet)=>{ jRet.virtual_directory = this.root_dir; });
+        this.#commands.set("get_virtual_directory_location", (sJson, jRet) => {
+            jRet.virtual_directory = this.root_dir;
+            jRet.supports_append_text_file = true;
+        });
         this.#commands.set("execute_powershell", this.#RunPowerShellScript.bind(this));
         this.#commands.set("find_in_files", this.#SearchFiles.bind(this));
         this.#commands.set("create_shell_session", (sJson, jRet)=>{ jRet.session_id=this.#CShell.CreateShell().session_id; });
@@ -324,6 +328,104 @@ class Server
             jRet.success = false;
             jRet.msg = String(err);
         }                    
+    }
+
+    async #AppendFile(sJson, jRet)
+    {
+        let writing = false;
+        try
+        {
+            const content = sJson.content;
+            if (typeof content !== 'string' || !content.isWellFormed())
+                throw new Error('Append content must be a well-formed Unicode string.');
+            const filename = await this.#ResolveAppendPath(sJson.file_name);
+            const { O_APPEND, O_CREAT, O_RDWR, O_NOFOLLOW } = fsys.constants;
+            const handle = await fsp.open(filename, O_APPEND | O_CREAT | O_RDWR | (O_NOFOLLOW ?? 0));
+            try
+            {
+                if (!(await handle.stat()).isFile()) throw new Error('The append target must be a regular file.');
+                const prefix = await this.#ReadAppendPrefix(handle);
+                const bytes = this.#EncodeAppendText(content, prefix);
+                writing = true;
+                await handle.writeFile(bytes);
+            }
+            finally { await handle.close(); }
+        }
+        catch (error)
+        {
+            jRet.success = false;
+            jRet.msg = writing ? `Append failed after writing began; check for appended data before retrying: ${error.message}` : error.message;
+        }
+    }
+
+    async #ResolveAppendPath(relativeName)
+    {
+        if (typeof relativeName !== 'string' || relativeName.trim() === '')
+            throw new Error('Supply a relative project path with a filename.');
+        const name = relativeName.replaceAll('\\', psys.sep);
+        if (psys.isAbsolute(name) || (process.platform === 'win32' && name.includes(':')))
+            throw new Error('Supply a relative project path with a filename.');
+        const root = psys.resolve(this.root_dir);
+        const filename = psys.resolve(this.#MapPath(name));
+        const relative = psys.relative(root, filename);
+        if (!relative || relative === '..' || relative.startsWith(`..${psys.sep}`) || psys.isAbsolute(relative))
+            throw new Error('The append path must stay inside the selected project.');
+
+        await this.#CheckAppendPath(root, relative.split(psys.sep));
+        return filename;
+    }
+
+    async #CheckAppendPath(root, parts)
+    {
+        let path = root;
+        for (const [index, part] of parts.entries())
+        {
+            path = psys.join(path, part);
+            const leaf = index === parts.length - 1;
+            const info = await fsp.lstat(path).catch(error => {
+                if (leaf && error.code === 'ENOENT') return null;
+                throw error;
+            });
+            if (info?.isSymbolicLink()) throw new Error('AppendTextFile does not follow symbolic links or junctions inside the project root.');
+            if (info && !(leaf ? info.isFile() : info.isDirectory()))
+                throw new Error('The append path must name a regular file in an existing directory.');
+        }
+    }
+
+    async #ReadAppendPrefix(handle)
+    {
+        const prefix = Buffer.alloc(4);
+        let read = 0;
+        while (read < prefix.length)
+        {
+            const { bytesRead } = await handle.read(prefix, read, prefix.length - read, read);
+            if (bytesRead === 0) break;
+            read += bytesRead;
+        }
+        return prefix.subarray(0, read);
+    }
+
+    #EncodeAppendText(content, prefix)
+    {
+        if (prefix.length === 4 && prefix.readUInt32BE() === 0xFFFE0000) return this.#EncodeUtf32(content, false);
+        if (prefix.length === 4 && prefix.readUInt32BE() === 0x0000FEFF) return this.#EncodeUtf32(content, true);
+        if (prefix[0] === 0xFF && prefix[1] === 0xFE) return Buffer.from(content, 'utf16le');
+        if (prefix[0] === 0xFE && prefix[1] === 0xFF) return Buffer.from(content, 'utf16le').swap16();
+        return Buffer.from(content, 'utf8');
+    }
+
+    #EncodeUtf32(content, bigEndian)
+    {
+        const bytes = Buffer.allocUnsafe(content.length * 4);
+        let offset = 0;
+        for (const character of content)
+        {
+            const value = character.codePointAt(0);
+            if (bigEndian) bytes.writeUInt32BE(value, offset);
+            else bytes.writeUInt32LE(value, offset);
+            offset += 4;
+        }
+        return bytes.subarray(0, offset);
     }
 
     #CreateDirectory(sJson, jRet)
