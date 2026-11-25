@@ -21,6 +21,7 @@ const { CdpClientBridge } = require('./cdp-bridge.mts');
 const { CdpProducer, CdpDiagnosticTransport } = require('./cdp-provenance.mts');
 const { CdpCommandPublication } = require('./cdp-publication.mts');
 const { CdpLocalDiagnosticSink } = require('./cdp-local-diagnostics.mts');
+const { FileTrackerOperations } = require('./file-tracker-operations.mts');
 
 
 class Server
@@ -50,6 +51,9 @@ class Server
         this.root_dir = config.root_dir;
         this.conversation_location = config.conversation_location;
         this.#commands = new Map();
+        const fileTrackers = new FileTrackerOperations(() => ({ rootDirectory: this.root_dir, clientName: this.#client_name, account: this.#sEmail }));
+        this.#commands.set(FileTrackerOperations.openCommand, fileTrackers.open.bind(fileTrackers));
+        this.#commands.set(FileTrackerOperations.commitCommand, fileTrackers.commit.bind(fileTrackers));
         const mcpAuthorization = new McpAuthorizationCommands();
         this.#commands.set('mcp_open_authorization_url', mcpAuthorization.openAuthorizationUrl.bind(mcpAuthorization));
         const projectPicker = new ProjectPicker(GlobalConfig, () => this.root_dir);
@@ -145,8 +149,11 @@ class Server
                 catch { this.#cdpPublication.unexpectedFailure(cmd); }
                 continue;
             }
-            console.log('------------------', new Date().toLocaleString(), '------------------');
-            console.log('incomming command: ', cmd);
+            const trackerCommand = FileTrackerOperations.handles(cmd.command);
+            if (!trackerCommand) {
+                console.log('------------------', new Date().toLocaleString(), '------------------');
+                console.log('incomming command: ', cmd);
+            }
             var cb = this.#commands.get(cmd.command);
             if (cb != null)
             {
@@ -157,13 +164,18 @@ class Server
                 }
                 catch(err)
                 {
-                    console.error('failed to invoke function: ', err.stack || err)
                     jret.success = false;
-                    jret.msg = JSON.stringify(err);                    
+                    if (trackerCommand) jret.msg = 'The file tracker command failed unexpectedly.';
+                    else {
+                        console.error('failed to invoke function: ', err.stack || err)
+                        jret.msg = JSON.stringify(err);
+                    }
                 }
-                console.log('result: ');
-                console.log(JSON.stringify(jret));
-                console.log('------------------');                
+                if (!trackerCommand) {
+                    console.log('result: ');
+                    console.log(JSON.stringify(jret));
+                    console.log('------------------');
+                }
                 await this.Reply(cmd.id, jret);
             }
         }
