@@ -10,6 +10,7 @@ export interface FileTrackerCaptureRequest {
     conversationId: string;
     statementId: string | null;
     description: string;
+    reviewProof?: unknown;
     validateLocation: () => void | Promise<void>;
     git?: FileTrackerGit;
 }
@@ -83,13 +84,17 @@ export class FileTrackerCapture {
     }
 
     private message(request: FileTrackerCaptureRequest): Buffer {
-        const { conversationId, statementId, description } = request;
+        const { conversationId, statementId, description, reviewProof } = request;
         if (!this.isId(conversationId) || (statementId !== null && !this.isId(statementId))) throw new FileTrackerCaptureError('File tracking requires trusted decimal conversation and statement IDs.');
         if (typeof description !== 'string' || !description.trim() || !description.isWellFormed() || description.length > 2048) {
             throw new FileTrackerCaptureError('File tracking requires a description of 1 to 2048 characters.');
         }
-        // Keep Int64 digits intact, even above Number.MAX_SAFE_INTEGER. Only the description needs JSON escaping.
-        return Buffer.from(`{"ConversationID":${conversationId},"StatementID":${statementId},"Description":${JSON.stringify(description)}}\n`, 'utf8');
+        if (reviewProof !== undefined && (typeof reviewProof !== 'string' || !/^[A-Za-z0-9_-]{1,8192}$/u.test(reviewProof))) {
+            throw new FileTrackerCaptureError('File tracking received invalid checkpoint registration proof.');
+        }
+        // Keep Int64 digits intact, even above Number.MAX_SAFE_INTEGER. Preserve the three-key legacy format without proof.
+        const proof = reviewProof === undefined ? '' : `,"ReviewProof":${JSON.stringify(reviewProof)}`;
+        return Buffer.from(`{"ConversationID":${conversationId},"StatementID":${statementId},"Description":${JSON.stringify(description)}${proof}}\n`, 'utf8');
     }
 
     private isId(value: unknown): value is string {

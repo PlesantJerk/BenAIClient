@@ -3,13 +3,12 @@ import { hostname } from 'node:os';
 import { FileTrackerCapture } from './file-tracker-capture.mts';
 import { FileTrackerCaptureError, FileTrackerGit } from './file-tracker-git.mts';
 import { FileTrackerIgnore } from './file-tracker-ignore.mts';
-import { FileTrackerError, FileTrackerLocation, type TrackerDirectory, type TrackerLocation } from './file-tracker-location.mts';
+import { FileTrackerError, FileTrackerLocation, type TrackerLocation } from './file-tracker-location.mts';
+import { FileTrackerReview, type TrackerCommand, type TrackerRouteSnapshot } from './file-tracker-review.mts';
 import { FileTrackerStore, type OpenedTrackerStore } from './file-tracker-store.mts';
 
 type TrackerRoute = Readonly<{ rootDirectory: string; clientName: string; account: string }>;
-type RouteSnapshot = Readonly<{ rawRoot: string; machine: string; version: string; root: TrackerDirectory }>;
-type SelectedTracker = Readonly<{ location: TrackerLocation; store: OpenedTrackerStore; route: RouteSnapshot }>;
-type TrackerCommand = Readonly<Record<string, unknown>>;
+type SelectedTracker = Readonly<{ location: TrackerLocation; store: OpenedTrackerStore; route: TrackerRouteSnapshot }>;
 
 export class FileTrackerOperations {
     static readonly openCommand = 'QA_OpenFileTracker';
@@ -26,6 +25,10 @@ export class FileTrackerOperations {
     #pending: Promise<void> = Promise.resolve();
 
     constructor(getRoute: () => TrackerRoute) { this.#getRoute = getRoute; }
+
+    createReview(): FileTrackerReview {
+        return new FileTrackerReview(this.#git, this.#store, () => this.routeSnapshot());
+    }
 
     static handles(command: unknown): boolean {
         return command === this.openCommand || command === this.commitCommand;
@@ -90,20 +93,25 @@ export class FileTrackerOperations {
             this.revalidate(binding);
             FileTrackerLocation.assertNotNested(binding.location);
             return this.#capture.capture({ rootPath: binding.location.project.path, repoPath: binding.store.repoPath,
-                conversationId, statementId, description, validateLocation, git: this.#git });
+                conversationId, statementId, description, reviewProof: command.reviewProof, validateLocation, git: this.#git });
         });
     }
 
-    private readRoute(): RouteSnapshot {
+    private routeSnapshot(): TrackerRouteSnapshot {
+        const route = this.#getRoute();
+        if (typeof route.clientName !== 'string' || !route.clientName || typeof route.account !== 'string' || !route.account) throw this.stale();
+        const machine = createHash('sha256').update(JSON.stringify([this.#host, route.clientName, route.account.toLowerCase()])).digest('hex');
+        const root = FileTrackerLocation.configuredRoot(route.rootDirectory);
+        const version = JSON.stringify([machine, route.rootDirectory, root.path, root.identity]);
+        return { rawRoot: route.rootDirectory, machine, root, version };
+    }
+
+    private readRoute(): TrackerRouteSnapshot {
         try {
-            const route = this.#getRoute();
-            if (typeof route.clientName !== 'string' || !route.clientName || typeof route.account !== 'string' || !route.account) throw this.stale();
-            const machine = createHash('sha256').update(JSON.stringify([this.#host, route.clientName, route.account.toLowerCase()])).digest('hex');
-            const root = FileTrackerLocation.configuredRoot(route.rootDirectory);
-            const version = JSON.stringify([machine, route.rootDirectory, root.path, root.identity]);
-            if (version !== this.#routeVersion) this.#bindings.clear();
-            this.#routeVersion = version;
-            return { rawRoot: route.rootDirectory, machine, root, version };
+            const route = this.routeSnapshot();
+            if (route.version !== this.#routeVersion) this.#bindings.clear();
+            this.#routeVersion = route.version;
+            return route;
         } catch (err) {
             this.#bindings.clear();
             this.#routeVersion = undefined;
@@ -111,7 +119,7 @@ export class FileTrackerOperations {
         }
     }
 
-    private verifySelection(location: TrackerLocation, expected: RouteSnapshot): TrackerLocation {
+    private verifySelection(location: TrackerLocation, expected: TrackerRouteSnapshot): TrackerLocation {
         const route = this.readRoute();
         if (route.version !== expected.version || !FileTrackerLocation.sameDirectory(route.root, location.virtualRoot)) throw this.stale();
         const current = FileTrackerLocation.project(route.rawRoot, location.projectPath);

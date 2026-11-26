@@ -84,6 +84,14 @@ export class FileTrackerStore {
         return { repoPath: dirs.repo.path, manifest: expected, manifestFile: saved.identity, configFile: config, created: false };
     }
 
+    trackingHead(repoPath: string): string {
+        const refs = this.childDirectory(repoPath, 'refs');
+        const heads = this.childDirectory(refs, 'heads');
+        const { text } = FileTrackerStore.readSmallFile(heads, FileTrackerStore.#branch, 64);
+        if (!FileTrackerStore.#sha.test(text)) throw this.foreign();
+        return text.slice(0, -1);
+    }
+
     private directories(location: TrackerLocation, codeName: string): StoreDirectories {
         const work = FileTrackerLocation.privateChild(location.project.path, '.AIWork', false);
         const tracking = work && FileTrackerLocation.privateChild(work.path, 'tracking', false);

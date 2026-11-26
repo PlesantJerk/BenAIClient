@@ -22,7 +22,7 @@ export class FileTrackerCaptureError extends Error {
 
 export class FileTrackerGit {
     private readonly executable = 'C:\\Program Files\\Git\\cmd\\git.exe';
-    private readonly commands = new Set(['init', 'check-ignore', 'rev-parse', 'ls-tree', 'hash-object', 'update-index', 'write-tree', 'commit-tree', 'update-ref']);
+    private readonly commands = new Set(['init', 'check-ignore', 'rev-parse', 'ls-tree', 'hash-object', 'update-index', 'write-tree', 'commit-tree', 'update-ref', 'cat-file', 'merge-base']);
 
     run(repoPath: string, args: readonly string[], options: FileTrackerGitOptions = {}): Promise<{ stdout: Buffer; exitCode: number }> {
         const command = args[0];

@@ -22,6 +22,7 @@ const { CdpProducer, CdpDiagnosticTransport } = require('./cdp-provenance.mts');
 const { CdpCommandPublication } = require('./cdp-publication.mts');
 const { CdpLocalDiagnosticSink } = require('./cdp-local-diagnostics.mts');
 const { FileTrackerOperations } = require('./file-tracker-operations.mts');
+const { FileTrackerReview } = require('./file-tracker-review.mts');
 
 
 class Server
@@ -54,6 +55,9 @@ class Server
         const fileTrackers = new FileTrackerOperations(() => ({ rootDirectory: this.root_dir, clientName: this.#client_name, account: this.#sEmail }));
         this.#commands.set(FileTrackerOperations.openCommand, fileTrackers.open.bind(fileTrackers));
         this.#commands.set(FileTrackerOperations.commitCommand, fileTrackers.commit.bind(fileTrackers));
+        const checkpointReview = fileTrackers.createReview();
+        this.#commands.set(FileTrackerReview.manifestCommand, checkpointReview.manifest.bind(checkpointReview));
+        this.#commands.set(FileTrackerReview.fileCommand, checkpointReview.file.bind(checkpointReview));
         const mcpAuthorization = new McpAuthorizationCommands();
         this.#commands.set('mcp_open_authorization_url', mcpAuthorization.openAuthorizationUrl.bind(mcpAuthorization));
         const projectPicker = new ProjectPicker(GlobalConfig, () => this.root_dir);
@@ -149,7 +153,7 @@ class Server
                 catch { this.#cdpPublication.unexpectedFailure(cmd); }
                 continue;
             }
-            const trackerCommand = FileTrackerOperations.handles(cmd.command);
+            const trackerCommand = FileTrackerOperations.handles(cmd.command) || FileTrackerReview.handles(cmd.command);
             if (!trackerCommand) {
                 console.log('------------------', new Date().toLocaleString(), '------------------');
                 console.log('incomming command: ', cmd);
