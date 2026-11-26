@@ -115,17 +115,15 @@ export class FileTrackerCapture {
     }
 
     private async oldFiles(git: FileTrackerGit, repoPath: string, commit: string): Promise<Map<string, string>> {
-        const { stdout } = await git.run(repoPath, ['ls-tree', '-r', '-z', '--full-tree', commit], { maxOutputBytes: 5 * 1024 * 1024 });
-        const records = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(stdout).split('\0');
-        if (records.pop() !== '' || records.length > 8_000) throw new FileTrackerCaptureError('The previous private tracker tree is unsupported.');
+        const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
         const files = new Map<string, string>();
-        for (const record of records) {
-            const match = /^100644 blob ([0-9a-f]{40})\t(.+)$/su.exec(record);
+        await git.records(repoPath, ['ls-tree', '-r', '-z', '--full-tree', commit], 0, bytes => {
+            const match = /^100644 blob ([0-9a-f]{40})\t(.+)$/su.exec(decoder.decode(bytes));
             if (!match || match[2].length > 512 || !match[2].split('/').every(FileTrackerSource.safeName) || files.has(match[2])) {
                 throw new FileTrackerCaptureError('The previous private tracker tree contains an unsupported path or object.');
             }
             files.set(match[2], match[1]);
-        }
+        });
         return files;
     }
 
@@ -148,9 +146,9 @@ export class FileTrackerCapture {
 
     private async writeCommit(git: FileTrackerGit, repoPath: string, scratchRoot: string, parent: string | null,
         current: ReadonlyMap<string, string>, message: Buffer): Promise<string> {
-        const entries = Array.from(current, ([file, sha]) => `100644 ${sha}\t${file}\0`).join('');
-        await git.run(repoPath, ['update-index', '-z', '--index-info'], { input: Buffer.from(entries), scratchRoot });
-        const tree = this.parseSha((await git.run(repoPath, ['write-tree'], { scratchRoot })).stdout);
+        const entries = function* () { for (const [file, sha] of current) yield `100644 ${sha}\t${file}\0`; };
+        await git.run(repoPath, ['update-index', '-z', '--index-info'], { input: entries(), scratchRoot, longRunning: true });
+        const tree = this.parseSha((await git.run(repoPath, ['write-tree'], { scratchRoot, longRunning: true })).stdout);
         const args = ['commit-tree', tree, ...(parent ? ['-p', parent] : []), '-F', '-'];
         return this.parseSha((await git.run(repoPath, args, { input: message })).stdout);
     }

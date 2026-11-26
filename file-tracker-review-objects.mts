@@ -14,9 +14,7 @@ export type CheckpointVersion = Readonly<{
 }>;
 
 export class FileTrackerReviewObjects {
-    static readonly maxTreeFiles = 8_000;
     static readonly #displayBytes = 65_536;
-    static readonly #treeBytes = 13 * 1024 * 1024;
     static readonly #id = /^[0-9a-f]{40}$/u;
     readonly #git: FileTrackerGit;
     readonly #repo: string;
@@ -33,7 +31,7 @@ export class FileTrackerReviewObjects {
         if (!FileTrackerReviewObjects.isSha(head)) throw this.invalid();
         if (head === knownHead || head === endCommit) return;
         await this.commit(head);
-        const { exitCode } = await this.#git.run(this.#repo, ['merge-base', '--is-ancestor', endCommit, head], { allowExitCodes: [0, 1] });
+        const { exitCode } = await this.#git.run(this.#repo, ['merge-base', '--is-ancestor', endCommit, head], { allowExitCodes: [0, 1], longRunning: true });
         if (exitCode !== 0) throw this.invalid();
     }
 
@@ -73,17 +71,14 @@ export class FileTrackerReviewObjects {
     }
 
     private async tree(sha: string): Promise<Map<string, string>> {
-        const { stdout } = await this.#git.run(this.#repo, ['ls-tree', '-r', '-z', '--full-tree', sha, '--'], { maxOutputBytes: FileTrackerReviewObjects.#treeBytes });
-        const records = this.utf8(stdout).split('\0');
-        if (records.pop() !== '' || records.length > FileTrackerReviewObjects.maxTreeFiles) throw this.invalid();
         const files = new Map<string, string>();
         const root: TreeDirectory = new Map();
-        for (const record of records) {
-            const match = /^100644 blob ([0-9a-f]{40})\t(.+)$/su.exec(record);
+        await this.#git.records(this.#repo, ['ls-tree', '-r', '-z', '--full-tree', sha, '--'], 0, bytes => {
+            const match = /^100644 blob ([0-9a-f]{40})\t(.+)$/su.exec(this.utf8(bytes));
             if (!match || !FileTrackerReviewObjects.isSha(match[1]) || !FileTrackerReviewObjects.isPath(match[2])) throw this.invalid();
             this.addPath(match[2], match[1], root);
             files.set(match[2], match[1]);
-        }
+        });
         // Only canonical captured trees are accepted; Git can parse a substituted loose object without hashing it.
         if (this.treeSha(root) !== sha) throw this.invalid();
         return files;
@@ -91,7 +86,6 @@ export class FileTrackerReviewObjects {
 
     private addPath(path: string, sha: string, root: TreeDirectory): void {
         const parts = path.split('/');
-        if (parts.length > 49) throw this.invalid();
         let directory = root;
         for (const [i, name] of parts.entries()) {
             const key = name.toLowerCase();
@@ -114,8 +108,10 @@ export class FileTrackerReviewObjects {
         const sorted = Array.from(directory.values(), member => ({ member,
             sortKey: Buffer.from(member.name + ('directory' in member ? '/' : '')) }));
         sorted.sort((a, b) => Buffer.compare(a.sortKey, b.sortKey));
-        const body = Buffer.concat(sorted.map(({ member }) => this.treeMemberBytes(member)));
-        return this.objectSha('tree', body);
+        const length = sorted.reduce((sum, { member, sortKey }) => sum + sortKey.length + ('directory' in member ? 26 : 28), 0);
+        const hash = createHash('sha1').update(`tree ${length}\0`);
+        for (const { member } of sorted) hash.update(this.treeMemberBytes(member));
+        return hash.digest('hex');
     }
 
     private treeMemberBytes(member: TreeMember): Buffer {
@@ -146,7 +142,19 @@ export class FileTrackerReviewObjects {
         return this.classify(stdout);
     }
 
-    private async blobSize(sha: string): Promise<number> {
+    async copyBlob(sha: string, size: number, consume: (chunk: Buffer) => void, signal?: AbortSignal): Promise<void> {
+        const hash = createHash('sha1').update(`blob ${size}\0`);
+        let actual = 0;
+        await this.#git.run(this.#repo, ['cat-file', 'blob', sha], { longRunning: true, signal, output: chunk => {
+            actual += chunk.length;
+            if (actual > size) throw this.invalid();
+            hash.update(chunk);
+            consume(chunk);
+        } });
+        if (size !== actual || hash.digest('hex') !== sha) throw this.invalid();
+    }
+
+    async blobSize(sha: string): Promise<number> {
         const { stdout } = await this.#git.run(this.#repo, ['cat-file', '--batch-check'], { input: Buffer.from(`${sha}\n`), maxOutputBytes: 96 });
         const match = /^([0-9a-f]{40}) blob (0|[1-9][0-9]{0,15})\n$/u.exec(stdout.toString('latin1'));
         const size = Number(match?.[2]);

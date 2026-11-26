@@ -1,5 +1,5 @@
 import koffi from 'koffi';
-import { opendirSync, type Dirent } from 'node:fs';
+import { closeSync, openSync, opendirSync, writeSync, type Dirent } from 'node:fs';
 import path from 'node:path';
 import { FileTrackerCaptureError } from './file-tracker-git.mts';
 
@@ -65,12 +65,54 @@ export class FileTrackerSource {
         } finally { pin.release(); }
     }
 
-    directory(parts: readonly string[], limit: number, readIgnore: (entries: TrackerDirectoryEntry[]) => void): TrackerDirectoryEntry[] {
+    directory(parts: readonly string[], readIgnore: (entries: TrackerDirectoryEntry[]) => void): TrackerDirectoryEntry[] {
         return this.withParents(parts, fullPath => {
-            const entries = this.list(fullPath, limit);
+            const entries = this.list(fullPath);
             readIgnore(entries);
             return entries;
         });
+    }
+
+    copyFile(parts: readonly string[], destination: string, digest?: (size: number, bytes: Buffer) => void): boolean {
+        const name = parts.at(-1)!;
+        if (!FileTrackerSource.safeName(name)) throw new FileTrackerCaptureError('File tracking rejected an unsafe file name.');
+        return this.withParents(parts.slice(0, -1), directory => this.copyPinned(path.join(directory, name), destination, digest));
+    }
+
+    private copyPinned(fullPath: string, destination: string, digest?: (size: number, bytes: Buffer) => void): boolean {
+        // Keep no-follow and deny writers/renames for the entire source copy, including its hash.
+        const handle = this.open(fullPath, 0x80000000, 0x1);
+        try {
+            const info = this.info(handle);
+            if (!this.isOrdinaryFile(handle, info)) return false;
+            const size = info.readUInt32LE(32) * 0x100000000 + info.readUInt32LE(36);
+            if (!Number.isSafeInteger(size)) throw new FileTrackerCaptureError('File tracking cannot represent this file size exactly.');
+            this.copyBytes(handle, size, destination, digest);
+            return true;
+        } finally { this.closeHandle(handle); }
+    }
+
+    private copyBytes(handle: Handle, size: number, destination: string, digest?: (size: number, bytes: Buffer) => void): void {
+        const fd = openSync(destination, 'wx');
+        try {
+            const bytes = Buffer.allocUnsafe(Math.min(size, 1024 * 1024));
+            const count = Buffer.alloc(4);
+            if (!size) digest?.(0, bytes);
+            for (let remaining = size; remaining > 0;) {
+                const length = Math.min(remaining, bytes.length);
+                if (!this.readHandle(handle, bytes, length, count, null) || count.readUInt32LE(0) !== length) {
+                    throw new FileTrackerCaptureError('File tracking could not read all bytes of a listed file; no snapshot was published.');
+                }
+                const chunk = bytes.subarray(0, length);
+                digest?.(size, chunk);
+                for (let offset = 0; offset < length;) {
+                    const written = writeSync(fd, chunk, offset, length - offset);
+                    if (written <= 0) throw new FileTrackerCaptureError('File tracking could not finish a private staged file.');
+                    offset += written;
+                }
+                remaining -= length;
+            }
+        } finally { closeSync(fd); }
     }
 
     readFile(parts: readonly string[], limit: number): TrackerFileBytes | TrackerExcludedFile {
@@ -79,13 +121,12 @@ export class FileTrackerSource {
         return this.withParents(parts.slice(0, -1), fullPath => this.openFile(path.join(fullPath, name), limit));
     }
 
-    private list(fullPath: string, limit: number): TrackerDirectoryEntry[] {
+    private list(fullPath: string): TrackerDirectoryEntry[] {
         // Keep ancestors pinned while Node enumerates the directory. Never follow an entry reported as a link.
         const dir = opendirSync(fullPath, { bufferSize: 64 });
         try {
             const entries: TrackerDirectoryEntry[] = [];
             for (let entry: Dirent | null; (entry = dir.readSync()) !== null;) {
-                if (entries.length === limit) throw new FileTrackerCaptureError('File tracking exceeded its directory entry limit.');
                 entries.push({ name: entry.name, directory: entry.isDirectory(), unsafe: !entry.isDirectory() && !entry.isFile() });
             }
             return entries;

@@ -42,7 +42,8 @@ class Acceptance {
             await this.test('mismatched existing manifest rejected both on open and current binding',() => this.invalidManifest());
             await this.test('inherited Git environment ignored and ordinary hooks do not affect capture',() => this.environment());
             await this.test('same-tracker concurrency across two native client contexts',() => this.concurrent());
-            await this.test('oversize file rejected without publishing a private ref',() => this.fileCap());
+            await this.test('file above the former 16 MiB cap captured without altering raw bytes',() => this.largeFile());
+            await this.test('a competing write handle cannot publish a partial or changing snapshot',() => this.lockedFile());
             await this.test('new nested repo cannot silently report present tracked descendants deleted',() => this.newNested());
         } catch (error) {
             this.log({status:'blocked',reason:'A prerequisite group failed; dependent groups not run.'});
@@ -325,19 +326,40 @@ class Acceptance {
         f.shadowContents(repo,this.shaA,f.changed);
     }
 
-    async fileCap() {
+    async largeFile() {
         const f=this.fixture, repo=this.repo(f.alternate,this.b);
-        const tracker=this.ok(await this.open(f.alternate,this.b),'open cap fixture tracker');
-        const before=f.shadowRefs(repo);
-        const file=path.join(f.alternate,'file-too-large.bin');
-        fs.closeSync(fs.openSync(file,'wx'));
-        fs.truncateSync(file,16*1024*1024+1);
+        const tracker=this.ok(await this.open(f.alternate,this.b),'open large-file fixture tracker');
+        const fileName='large-file.bin', file=path.join(f.alternate,fileName), length=16*1024*1024+17;
+        const fd=fs.openSync(file,'wx');
         try {
-            const result=await this.commit(tracker);
-            this.denied(result,'file cap');
-            assert.match(result.msg,/exceed|limit|size|large|cap/i,'file-cap failure should identify the constraint');
-            assert.equal(f.shadowRefs(repo),before,'file cap did not advance private tracker ref');
+            fs.ftruncateSync(fd,length);
+            fs.writeSync(fd,Buffer.from([0xff,0x1a,0x00,0x0d,0x0a]),0,5,length-5);
+        } finally { fs.closeSync(fd); }
+        try {
+            const expected=f.shadow(repo,['hash-object','--no-filters','--',file]).toString('ascii').trim();
+            const result=this.ok(await this.commit(tracker),'capture over former per-file cap');
+            assert.equal(result.changed,true);
+            assert.deepEqual(result.counts,{added:1,modified:0,deleted:0});
+            assert.equal(f.shadow(repo,['rev-parse',`${result.commit}:${fileName}`]).toString('ascii').trim(),expected);
+            assert.equal(f.shadow(repo,['cat-file','-s',expected]).toString('ascii').trim(),String(length));
+            this.assertNoop(this.ok(await this.commit(tracker),'large unchanged capture'),result.commit);
         } finally { fs.unlinkSync(file); }
+    }
+
+    async lockedFile() {
+        const f=this.fixture, repo=this.repo(f.alternate,this.b);
+        const tracker=this.ok(await this.open(f.alternate,this.b),'open writer-lock fixture tracker');
+        const before=f.shadowRefs(repo);
+        const file=path.join(f.alternate,'active-writer.txt');
+        const fd=fs.openSync(file,'wx');
+        try {
+            fs.writeSync(fd,'synthetic unfinished content\r\n');
+            const reply=await this.commit(tracker);
+            this.denied(reply,'open writer holds file');
+            assert.match(reply.msg,/Windows error 32/);
+            assert.equal(f.shadowRefs(repo),before,'competing writer did not advance private ref');
+            assert.equal(fs.readFileSync(file,'utf8'),'synthetic unfinished content\r\n');
+        } finally { fs.closeSync(fd); fs.unlinkSync(file); }
     }
 
     async newNested() {

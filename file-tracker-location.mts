@@ -115,15 +115,10 @@ export class FileTrackerLocation {
 
     private static assertNoTrackedDescendant(project: string): void {
         const pending = [project];
-        let visited = 0, entries = 0;
         while (pending.length) {
             const current = pending.pop()!;
-            if (++visited > 8192) throw new FileTrackerError('Cannot verify nesting within the pilot directory-walk limit. Specify a narrower project.');
             if (current !== project && this.hasTrackerArea(current)) throw new FileTrackerError('The selected directory contains another tracker target.');
             const children = readdirSync(current, { withFileTypes: true });
-            if ((entries += children.length) > 200_000 || pending.length + children.length > 200_000) {
-                throw new FileTrackerError('Cannot verify nesting within the pilot directory-walk limit. Specify a narrower project.');
-            }
             for (const child of children) {
                 if (child.isDirectory() && !child.isSymbolicLink() && this.ordinary(child.name)) {
                     const path = join(current, child.name);

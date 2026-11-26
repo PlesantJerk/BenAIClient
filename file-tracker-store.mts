@@ -68,7 +68,7 @@ export class FileTrackerStore {
             refs.withPinnedDirectory(() => objects.withPinnedDirectory(action))));
     }
 
-    attach(location: TrackerLocation, codeName: string, machine: string): OpenedTrackerStore {
+    attach(location: TrackerLocation, codeName: string, machine: string, verifiedHead?: string): OpenedTrackerStore {
         const dirs = this.directories(location, codeName);
         new FileTrackerSource(dirs.repo.path).assertRoot();
         const saved = FileTrackerStore.readSmallFile(dirs.store.path, 'tracker.json', 16_384);
@@ -80,7 +80,7 @@ export class FileTrackerStore {
         for (const key of Object.keys(expected) as (keyof TrackerManifest)[]) {
             if (!Object.hasOwn(raw, key) || raw[key] !== expected[key]) throw this.foreign();
         }
-        const config = this.validateBare(dirs.repo.path, false);
+        const config = this.validateBare(dirs.repo.path, false, verifiedHead);
         return { repoPath: dirs.repo.path, manifest: expected, manifestFile: saved.identity, configFile: config, created: false };
     }
 
@@ -114,7 +114,7 @@ export class FileTrackerStore {
             storeIdentity: dirs.store.identity, repoIdentity: dirs.repo.identity };
     }
 
-    private validateBare(repo: string, empty: boolean): string {
+    private validateBare(repo: string, empty: boolean, verifiedHead?: string): string {
         this.assertNames(repo, ['HEAD', 'config', 'objects', 'refs']);
         const config = FileTrackerStore.readSmallFile(repo, 'config', 2048);
         this.validateConfig(config.text);
@@ -125,18 +125,23 @@ export class FileTrackerStore {
         this.assertNames(heads, empty ? [] : [FileTrackerStore.#branch]);
         this.assertNames(this.childDirectory(refs, 'tags'), []);
         const head = FileTrackerLocation.matchingName(heads, FileTrackerStore.#branch);
-        if (head && !FileTrackerStore.#sha.test(FileTrackerStore.readSmallFile(heads, head, 64).text)) throw this.foreign();
-        this.validateObjects(this.childDirectory(repo, 'objects'), empty);
+        const headText = head ? FileTrackerStore.readSmallFile(heads, head, 64).text : null;
+        if (headText && !FileTrackerStore.#sha.test(headText)) throw this.foreign();
+        const objects = this.childDirectory(repo, 'objects');
+        // A continuation with precisely the verified ref does not open any Git objects.
+        if (verifiedHead === undefined || headText !== `${verifiedHead}\n`) this.validateObjects(objects, empty);
+        else {
+            this.assertNames(this.childDirectory(objects, 'info'), []);
+            this.assertNames(this.childDirectory(objects, 'pack'), []);
+        }
         return config.identity + ':' + config.text;
     }
 
     private validateObjects(objects: string, empty: boolean): void {
-        let count = 0;
         for (const name of readdirSync(objects)) {
             if (name !== 'info' && name !== 'pack' && (empty || !/^[a-f0-9]{2}$/.test(name))) throw this.foreign();
             const dir = this.childDirectory(objects, name);
             const leaves = readdirSync(dir);
-            if ((count += leaves.length) > 200_000) throw new FileTrackerError('Tracker object validation exceeded the pilot limit.');
             if (name === 'info' || name === 'pack') { if (leaves.length) throw this.foreign(); continue; }
             for (const leaf of leaves) {
                 if (!/^[a-f0-9]{38}$/.test(leaf)) throw this.foreign();

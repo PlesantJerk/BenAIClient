@@ -1,9 +1,13 @@
 import { spawn } from 'node:child_process';
+import { Readable, pipeline } from 'node:stream';
 import { lstatSync } from 'node:fs';
 import path from 'node:path';
 
 export interface FileTrackerGitOptions {
-    input?: Buffer;
+    input?: Buffer | Iterable<string | Buffer>;
+    output?: (chunk: Buffer) => void;
+    longRunning?: boolean;
+    signal?: AbortSignal;
     workTree?: string;
     scratchRoot?: string;
     allowExitCodes?: readonly number[];
@@ -33,6 +37,22 @@ export class FileTrackerGit {
         }
         const cwd = options.workTree ?? (command === 'init' ? path.dirname(repoPath) : command === 'hash-object' ? options.scratchRoot! : repoPath);
         return this.execute(command, this.arguments(repoPath, args, options.workTree), cwd, env, options);
+    }
+
+    async records(repoPath: string, args: readonly string[], delimiter: number, consume: (line: Buffer) => void,
+        options: FileTrackerGitOptions = {}): Promise<void> {
+        let pieces: Buffer[] = [];
+        await this.run(repoPath, args, { ...options, longRunning: true, output: chunk => {
+            let start = 0;
+            for (let end = chunk.indexOf(delimiter); end >= 0; end = chunk.indexOf(delimiter, start)) {
+                const part = chunk.subarray(start, end);
+                consume(pieces.length ? Buffer.concat([...pieces, part]) : part);
+                pieces = [];
+                start = end + 1;
+            }
+            if (start < chunk.length) pieces.push(chunk.subarray(start));
+        } });
+        if (pieces.length) throw new FileTrackerCaptureError('Private Git returned an incomplete record.');
     }
 
     private validate(repoPath: string, command: string, options: FileTrackerGitOptions): void {
@@ -91,13 +111,22 @@ export class FileTrackerGit {
 
     private execute(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, options: FileTrackerGitOptions): Promise<{ stdout: Buffer; exitCode: number }> {
         return new Promise((resolve, reject) => {
-            const child = spawn(this.executable, args, { cwd, env, shell: false, windowsHide: true, stdio: 'pipe' });
+            const child = spawn(this.executable, args, { cwd, env, shell: false, windowsHide: true, stdio: 'pipe', signal: options.signal });
             const chunks: Buffer[] = [];
             let size = 0;
             let failure: Error | undefined;
             const stop = (message: string) => { failure ??= new FileTrackerCaptureError(message); child.kill(); };
-            const timeout = setTimeout(() => stop(`Private Git ${command} timed out.`), 60_000);
+            const timeout = options.longRunning ? undefined : setTimeout(() => stop(`Private Git ${command} timed out.`), 60_000);
             child.stdout.on('data', (chunk: Buffer) => {
+                if (failure) return;
+                if (options.output) {
+                    try { options.output(chunk); }
+                    catch (error) {
+                        failure = error instanceof FileTrackerCaptureError ? error : new FileTrackerCaptureError(`Private Git ${command} output could not be used.`);
+                        child.kill();
+                    }
+                    return;
+                }
                 size += chunk.length;
                 if (size > (options.maxOutputBytes ?? 65_536)) stop(`Private Git ${command} exceeded its output limit.`);
                 else chunks.push(chunk);
@@ -114,7 +143,12 @@ export class FileTrackerGit {
                     reject(new FileTrackerCaptureError(message, outcomeUnknown));
                 } else resolve({ stdout: Buffer.concat(chunks), exitCode: code });
             });
-            child.stdin.end(options.input);
+            if (options.input === undefined || Buffer.isBuffer(options.input)) child.stdin.end(options.input);
+            else pipeline(Readable.from(options.input), child.stdin, error => {
+                if (error && !['EPIPE', 'ERR_STREAM_PREMATURE_CLOSE'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+                    stop(`Private Git ${command} input failed.`);
+                }
+            });
         });
     }
 }
