@@ -12,7 +12,7 @@
   "type": "commonjs",
   "devDependencies": {
     "@types/screenshot-desktop": "^1.15.0",
-    "electron": "^40.4.1"
+    "electron": "^45.4.1"
   },
   "dependencies": {
     "@nut-tree-fork/nut-js": "^4.2.6",

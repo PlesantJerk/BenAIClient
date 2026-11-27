@@ -110,12 +110,20 @@ export async function takeScreenShot(cmd: ScreenShotCommand, jret: ReturnData)
 
 export async function moveMouse(cmd: MouseMoveCommand, jref: ReturnData) :Promise<void>
 {
+    let q = {} as MouseMoveCommand;
+    q.command = '';
+    q.id = '1234';    
+    q.x = cmd.x;
+    q.y = cmd.y;
+
     await mouse.setPosition(new Point(cmd.x/displayScale, cmd.y/displayScale));
 }
 
 export async function mouseClick(cmd: MouseClickCommand, jref: ReturnData) :Promise<void>
 {
-    await mouse.setPosition(new Point(cmd.x/displayScale, cmd.y/displayScale));
+    //await mouse.setPosition(new Point(cmd.x/displayScale, cmd.y/displayScale));
+    let r = {} as ReturnData;
+    await moveMouse(cmd as MouseMoveCommand, r);
     await delay(30);
     await mouse.click(cmd.button === 'left' ? Button.LEFT : Button.RIGHT);
     await delay(cmd.delay);    
@@ -190,7 +198,8 @@ export class DesktopActions
             left: () => mouse.scrollLeft(cmd.amount), right: () => mouse.scrollRight(cmd.amount) };
         if (!Object.prototype.hasOwnProperty.call(actions, cmd.direction))
             throw new Error('direction must be up, down, left, or right');
-        await mouse.setPosition(new Point(cmd.x / displayScale, cmd.y / displayScale));
+        //await mouse.setPosition(new Point(cmd.x / displayScale, cmd.y / displayScale));
+        await moveMouse(cmd, {} as ReturnData);
         await delay(30);
         await actions[cmd.direction]();
         await delay(cmd.delay);
@@ -202,6 +211,7 @@ export class DesktopActions
         DesktopActions.validatePoint(cmd.endX, cmd.endY);
         DesktopActions.requireInteger(cmd.duration, 'duration', 100, 10000);
         DesktopActions.requireInteger(cmd.delay, 'delay', 0, 10000);
+        await moveMouse({command: '', id: '', x: cmd.startX, y: cmd.startY}, {} as ReturnData);
         await mouse.setPosition(new Point(cmd.startX / displayScale, cmd.startY / displayScale));
         await delay(30);
         try {
@@ -222,7 +232,8 @@ export class DesktopActions
             await delay(Math.max(0, startTime + cmd.duration * step / steps - Date.now()));
             const x = cmd.startX + (cmd.endX - cmd.startX) * step / steps;
             const y = cmd.startY + (cmd.endY - cmd.startY) * step / steps;
-            await mouse.setPosition(new Point(x / displayScale, y / displayScale));
+            //await mouse.setPosition(new Point(x / displayScale, y / displayScale));
+            await moveMouse({ command: '', id: '', x: x, y: y}, {} as ReturnData);
         }
     }
 
