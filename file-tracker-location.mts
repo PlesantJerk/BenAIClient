@@ -64,6 +64,11 @@ export class FileTrackerLocation {
         return this.directory(join(parent, actual));
     }
 
+    static workAreaName(project: string): string {
+        // Reuse the project's spelling of this shared outer folder, not the names inside our private store.
+        return this.matchingName(project, '.AIWork') ?? '.AIWork';
+    }
+
     static privateChild(parent: string, name: string, create: boolean): TrackerDirectory | undefined {
         const actual = this.matchingName(parent, name);
         if (actual !== undefined && actual !== name) throw new FileTrackerError('The private tracker path has a conflicting name or casing.');
@@ -144,6 +149,6 @@ export class FileTrackerLocation {
             }
             if (p === workTree) break;
         }
-        return { workTree, probePath: relative(workTree, join(location.project.path, '.AIWork')).split(sep).join('/') };
+        return { workTree, probePath: relative(workTree, join(location.project.path, this.workAreaName(location.project.path))).split(sep).join('/') };
     }
 }

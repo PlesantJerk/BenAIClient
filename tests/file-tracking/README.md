@@ -19,3 +19,7 @@ Run `node review.mjs` with the same environment to exercise the dedicated, read-
 ## Scale and whole checkpoint evidence
 
 Run `node large-captures.mjs` with the same environment for an isolated capture exceeding 256 MiB in total and 16 MiB per file. It checks every large blob against stock Git, then transfers a complete 30 MiB historical file in bounded chunks and recomputes its Git hash after overwriting the live file. The test also checks that ordinary preview still reports a version above its display limit, and that wrong route, path, side, or offset and closed readers cannot return evidence. Add `--files` to capture over 8,000 files and enumerate over 30,000 ignored names, then read the full paged manifest and recheck unchanged capture. The fixture checks that at least 2 GiB of scratch space is available before creating any data and removes its own unique fixture afterward. These are regression sizes, not production limits.
+
+## Existing `.aiwork` directories
+
+Run `node work-area-casing.mjs` with the same offline environment. A disposable real Git worktree contains a Git-tracked file under lowercase `.aiwork`. The test opens and reopens the same tracker, captures and reads a saved edit, and checks the ordinary index, refs and existing file. A mixed-case outer name is also accepted, but a junction or incorrectly spelled private `tracking` child is rejected. Only the shared outer directory gets case-tolerant lookup; the tracker still excludes the entire directory from snapshots.

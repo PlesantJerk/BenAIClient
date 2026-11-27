@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { FileTrackerSource } from './file-tracker-files.mts';
 import { FileTrackerCaptureError, FileTrackerGit } from './file-tracker-git.mts';
+import { FileTrackerLocation } from './file-tracker-location.mts';
 import { FileTrackerSnapshot } from './file-tracker-snapshot.mts';
 
 export interface FileTrackerCaptureRequest {
@@ -78,7 +79,7 @@ export class FileTrackerCapture {
 
     private assertPrivateLocation(rootPath: string, repoPath: string): void {
         const relative = path.relative(rootPath, repoPath).split(path.sep);
-        if (relative.length !== 4 || relative[0] !== '.AIWork' || relative[1] !== 'tracking' || !FileTrackerSource.safeName(relative[2]) || relative[3] !== 'repo.git') {
+        if (relative.length !== 4 || relative[0] !== FileTrackerLocation.workAreaName(rootPath) || relative[1] !== 'tracking' || !FileTrackerSource.safeName(relative[2]) || relative[3] !== 'repo.git') {
             throw new FileTrackerCaptureError('The shadow Git repository must be inside the approved .AIWork/tracking directory.');
         }
     }

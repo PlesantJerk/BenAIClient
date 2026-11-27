@@ -34,7 +34,7 @@ export class FileTrackerStore {
 
     private async openPinned(location: TrackerLocation, codeName: string, machine: string, verifyRoute: () => void): Promise<OpenedTrackerStore> {
         verifyRoute();
-        const work = FileTrackerLocation.privateChild(location.project.path, '.AIWork', true)!;
+        const work = FileTrackerLocation.privateChild(location.project.path, FileTrackerLocation.workAreaName(location.project.path), true)!;
         const tracking = FileTrackerLocation.privateChild(work.path, 'tracking', true)!;
         const existing = FileTrackerLocation.privateChild(tracking.path, codeName, false);
         if (existing) return this.attach(location, codeName, machine);
@@ -93,7 +93,7 @@ export class FileTrackerStore {
     }
 
     private directories(location: TrackerLocation, codeName: string): StoreDirectories {
-        const work = FileTrackerLocation.privateChild(location.project.path, '.AIWork', false);
+        const work = FileTrackerLocation.privateChild(location.project.path, FileTrackerLocation.workAreaName(location.project.path), false);
         const tracking = work && FileTrackerLocation.privateChild(work.path, 'tracking', false);
         const store = tracking && FileTrackerLocation.privateChild(tracking.path, codeName, false);
         const repo = store && FileTrackerLocation.privateChild(store.path, 'repo.git', false);

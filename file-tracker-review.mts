@@ -149,7 +149,7 @@ export class FileTrackerReview {
         const route = this.#route();
         if (command.virtualRoot !== route.rawRoot) throw this.invalid();
         const expected = this.location(command, route);
-        const repoPath = join(expected.project.path, '.AIWork', 'tracking', FileTrackerLocation.codeName(command.codeName), 'repo.git');
+        const repoPath = join(expected.project.path, FileTrackerLocation.workAreaName(expected.project.path), 'tracking', FileTrackerLocation.codeName(command.codeName), 'repo.git');
         return this.#store.protectCapture(repoPath, async () => {
             const currentRoute = this.#route();
             const location = this.location(command, currentRoute);
