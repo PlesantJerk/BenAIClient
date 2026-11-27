@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { Readable, pipeline } from 'node:stream';
-import { lstatSync } from 'node:fs';
+import { lstatSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 
 export interface FileTrackerGitOptions {
@@ -25,7 +25,8 @@ export class FileTrackerCaptureError extends Error {
 }
 
 export class FileTrackerGit {
-    private readonly executable = 'C:\\Program Files\\Git\\cmd\\git.exe';
+    private readonly searchPath = process.env.PATH ?? '';
+    private executable?: string;
     private readonly commands = new Set(['init', 'check-ignore', 'rev-parse', 'ls-tree', 'hash-object', 'update-index', 'write-tree', 'commit-tree', 'update-ref', 'cat-file', 'merge-base']);
 
     run(repoPath: string, args: readonly string[], options: FileTrackerGitOptions = {}): Promise<{ stdout: Buffer; exitCode: number }> {
@@ -36,7 +37,9 @@ export class FileTrackerGit {
             env.GIT_INDEX_FILE = path.join(options.scratchRoot, 'index');
         }
         const cwd = options.workTree ?? (command === 'init' ? path.dirname(repoPath) : command === 'hash-object' ? options.scratchRoot! : repoPath);
-        return this.execute(command, this.arguments(repoPath, args, options.workTree), cwd, env, options);
+        // All callers use <project>/.AIWork/tracking/<codeName>/repo.git, including cold checkpoint review.
+        const executable = this.executableFor(path.resolve(repoPath, '../../../..'));
+        return this.execute(executable, command, this.arguments(repoPath, args, options.workTree), cwd, env, options);
     }
 
     async records(repoPath: string, args: readonly string[], delimiter: number, consume: (line: Buffer) => void,
@@ -69,21 +72,53 @@ export class FileTrackerGit {
         if (command === 'check-ignore' ? options.workTree !== path.join(scratch!, 'rules') : options.workTree !== undefined) {
             throw new FileTrackerCaptureError('File tracking Git cannot use the monitored worktree.');
         }
-        this.assertInstalledGit();
     }
 
     private isLocalAbsolute(value: string): boolean {
         return /^[A-Za-z]:\\/.test(value) && path.normalize(value) === value && !value.slice(2).includes(':');
     }
 
-    private assertInstalledGit(): void {
-        // No PATH lookup, per-user installation, configuration override, shell or executable from the tracked root.
-        for (const entry of ['C:\\Program Files', 'C:\\Program Files\\Git', 'C:\\Program Files\\Git\\cmd', this.executable]) {
-            const stat = lstatSync(entry, { throwIfNoEntry: false });
-            if (!stat || stat.isSymbolicLink() || (entry === this.executable ? !stat.isFile() : !stat.isDirectory())) {
-                throw new FileTrackerCaptureError('File tracking requires the machine-installed Git for Windows in C:\\Program Files\\Git.');
-            }
+    async checkAvailable(projectPath: string): Promise<void> {
+        const executable = this.executableFor(projectPath);
+        try {
+            const result = await this.execute(executable, '--version', ['--version'], path.dirname(executable), this.environment(), {});
+            if (/^git version [0-9]/.test(result.stdout.toString('utf8'))) return;
+        } catch {
+            // A non-runnable executable may fail synchronously in spawn or asynchronously in the child.
+            // Report the same actionable preflight error without exposing the local executable path.
         }
+        throw new FileTrackerCaptureError('BenAIClient found git.exe on its PATH but could not run git --version. Check the Git installation and restart BenAIClient.');
+    }
+
+    private executableFor(projectPath: string): string {
+        const root = realpathSync.native(projectPath);
+        if (this.executable) {
+            if (this.safeExecutable(this.executable, root) === this.executable) return this.executable;
+            throw new FileTrackerCaptureError('The selected Git executable is no longer available outside the tracked project. Check PATH and restart BenAIClient.');
+        }
+        for (const entry of this.searchPath.split(path.delimiter)) {
+            const directory = path.normalize(entry.trim().replace(/^"(.*)"$/, '$1'));
+            if (!this.isLocalAbsolute(directory)) continue; // Never infer the current directory, use PATHEXT, or ask a shell.
+            const found = this.safeExecutable(path.join(directory, 'git.exe'), root);
+            if (found) return this.executable = found;
+        }
+        throw new FileTrackerCaptureError('Could not find a usable git.exe on BenAIClient\'s PATH outside the tracked project. Add its installation directory to PATH and restart BenAIClient.');
+    }
+
+    private safeExecutable(candidate: string, projectRoot: string): string | undefined {
+        // Keep the existing no-link rule for both the executable and its parent directories.
+        try {
+            if (!lstatSync(candidate).isFile()) return undefined;
+            for (let p = path.dirname(candidate); p !== path.dirname(p); p = path.dirname(p)) {
+                if (!lstatSync(p).isDirectory()) return undefined;
+            }
+            const actual = realpathSync.native(candidate);
+            const fromProject = path.relative(projectRoot, actual);
+            if (this.isLocalAbsolute(actual) && (path.isAbsolute(fromProject) || fromProject === '..' || fromProject.startsWith('..' + path.sep))) return actual;
+        } catch (error) {
+            if (!['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM', 'EINVAL'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+        }
+        return undefined;
     }
 
     private environment(): NodeJS.ProcessEnv {
@@ -109,9 +144,9 @@ export class FileTrackerGit {
         ];
     }
 
-    private execute(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, options: FileTrackerGitOptions): Promise<{ stdout: Buffer; exitCode: number }> {
+    private execute(executable: string, command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, options: FileTrackerGitOptions): Promise<{ stdout: Buffer; exitCode: number }> {
         return new Promise((resolve, reject) => {
-            const child = spawn(this.executable, args, { cwd, env, shell: false, windowsHide: true, stdio: 'pipe', signal: options.signal });
+            const child = spawn(executable, args, { cwd, env, shell: false, windowsHide: true, stdio: 'pipe', signal: options.signal });
             const chunks: Buffer[] = [];
             let size = 0;
             let failure: Error | undefined;

@@ -29,6 +29,7 @@ export class FileTrackerStore {
     constructor(git: FileTrackerGit) { this.git = git; }
 
     async open(location: TrackerLocation, codeName: string, machine: string, verifyRoute: () => void): Promise<OpenedTrackerStore> {
+        await this.git.checkAvailable(location.project.path); // No private directories exist on our behalf until Git passes preflight.
         return new FileTrackerSource(location.project.path).withPinnedDirectory(() => this.openPinned(location, codeName, machine, verifyRoute));
     }
 
