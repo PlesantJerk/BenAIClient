@@ -2,6 +2,7 @@ import screenshot from 'screenshot-desktop';
 import { keyboard, mouse, Point, Button, Key, straightTo } from '@nut-tree-fork/nut-js';
 import koffi from 'koffi';
 import { execFileSync } from 'node:child_process';
+import { generateHumanPath } from './humanPath.mts';
 
 type KeyValue = import('@nut-tree-fork/nut-js').Key;
 type Command = {
@@ -107,8 +108,53 @@ export async function takeScreenShot(cmd: ScreenShotCommand, jret: ReturnData)
     jret.success = true;
     jret.msg = '';
 }
+//
+
+export async function getHumanPathEx(cmd: MouseMoveCommand) : Promise<Point[]>
+{
+    const give = new Uint16Array(5);
+    const ji = 2.0-(give[0]/65535.0*1.0);
+    const steps = Math.round(1000.0+(give[1]/65535.0*400));
+    const curve = 0.25-(give[2]/65535.0*0.1);
+    const g1 = (give[3]/65535.0*4.0-2.0)+cmd.x;
+    const g2 = (give[4]/65535.0*4.0-2.0)+cmd.y;
+    const ptFinal = new Point(g1/displayScale, g2/displayScale);
+    const ret =  generateHumanPath(await mouse.getPosition(), ptFinal, {
+            curvature: curve,
+            steps: steps,
+            jitter: ji
+        }); 
+    return ret;
+}
 
 export async function moveMouse(cmd: MouseMoveCommand, jref: ReturnData, cnt: number=5) :Promise<void>
+{
+    const give = new Uint16Array(5);
+    const g1 = (give[0]/65535.0*4.0-2.0)+cmd.x;
+    const g2 = (give[1]/65535.0*4.0-2.0)+cmd.y;
+    const ji = 2.0-(give[2]/65535.0*1.0);
+    const steps = Math.round(1000.0+(give[3]/65535.0*400));
+    const curve = 0.25-(give[4]/65535.0*0.1);
+    console.log('steps: ', steps);
+    //const ptFinal = new Point(cmd.x/displayScale, cmd.y/displayScale);
+    const ptFinal = new Point(g1/displayScale, g2/displayScale);
+    if (cnt === 5)
+    {
+        const currentPos = await mouse.getPosition();
+        const path = generateHumanPath(currentPos, ptFinal, {
+            curvature: curve,
+            steps: steps,
+            jitter: ji
+        });
+        console.log('path', path);
+        console.log('alt path', await straightTo(ptFinal));        
+        await mouse.move(path);
+        await mouse.move(straightTo(ptFinal));
+    }
+    else    
+        await mouse.move(straightTo(ptFinal));
+}
+export async function moveMouse2(cmd: MouseMoveCommand, jref: ReturnData, cnt: number=5) :Promise<void>
 {
     let q = {} as MouseMoveCommand;
     q.command = '';
@@ -251,6 +297,7 @@ export class DesktopActions
 
     private static async dragPath(cmd: MouseDragCommand): Promise<void>
     {
+        
         const steps = Math.max(1, Math.ceil(cmd.duration / 20));
         const startTime = Date.now();
         for (let step = 1; step <= steps; step++) {
@@ -260,6 +307,16 @@ export class DesktopActions
             //await mouse.setPosition(new Point(x / displayScale, y / displayScale));
             await moveMouse({ command: '', id: '', x: x, y: y}, {} as ReturnData, 0);
         }
+            
+        /*
+        const pts = await getHumanPathEx({command: '', id: '', x: cmd.startX, y: cmd.startY});
+        const startTime = Date.now();
+        for (let step = 1; step <= pts.length; step++) {
+            await delay(Math.max(0, startTime + cmd.duration * step / pts.length - Date.now()));
+            await moveMouse({ command: '', id: '', x: pts[step].x, y: pts[step].y}, {} as ReturnData, 0);
+        //await mouse.move(pts);
+        }
+        */
     }
 
     static async screenshotToClipboard(cmd: ScreenShotCommand, jret: ReturnData): Promise<void>
@@ -321,4 +378,6 @@ finally {
         });
     }
 }
+
+
 
