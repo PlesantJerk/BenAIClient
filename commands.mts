@@ -1,5 +1,5 @@
 import screenshot from 'screenshot-desktop';
-import { keyboard, mouse, Point, Button, Key } from '@nut-tree-fork/nut-js';
+import { keyboard, mouse, Point, Button, Key, straightTo } from '@nut-tree-fork/nut-js';
 import koffi from 'koffi';
 import { execFileSync } from 'node:child_process';
 
@@ -108,30 +108,40 @@ export async function takeScreenShot(cmd: ScreenShotCommand, jret: ReturnData)
     jret.msg = '';
 }
 
-export async function moveMouse(cmd: MouseMoveCommand, jref: ReturnData) :Promise<void>
+export async function moveMouse(cmd: MouseMoveCommand, jref: ReturnData, cnt: number=5) :Promise<void>
 {
     let q = {} as MouseMoveCommand;
     q.command = '';
     q.id = '1234';    
     q.x = cmd.x;
     q.y = cmd.y;
-    const xvals = new Uint16Array(5);
-    const yvals = new Uint16Array(5);
-    const tvals = new Uint16Array(5);
+    const xvals = new Uint16Array(cnt);
+    const yvals = new Uint16Array(cnt);
+    const tvals = new Uint16Array(cnt);
     crypto.getRandomValues(xvals);
     crypto.getRandomValues(yvals);
     crypto.getRandomValues(tvals);
-    for(let i=0;i<5;i++)
+    for(let i=0;i<cnt;i++)
     {
-        const x1 = (xvals[i]/65535.0*2000.0-1000.0)+cmd.x;
-        const y1 = (yvals[i]/65535.0*2000.0-1000.0)+cmd.y;        
+        let x1 = (xvals[i]/65535.0*2000.0-1000.0)+cmd.x;
+        let y1 = (yvals[i]/65535.0*2000.0-1000.0)+cmd.y;        
+        if (x1 < 0) x1 =0;
+        if (y1 < 0) y1 =0;
         console.log("moving to ", x1, ', ', y1 );
-        await mouse.setPosition(new Point(cmd.x/displayScale, cmd.y/displayScale));
+        const pt =new Point(x1/displayScale, y1/displayScale);
+        await mouse.move(straightTo(pt));
+        //await mouse.setPosition(straightTo(pt));
         const t1 = tvals[i]/65535.0*100.0;
         console.log('delay ', 100+t1, 'ms');
         await delay(100+t1);
     }
-    await mouse.setPosition(new Point(cmd.x/displayScale, cmd.y/displayScale));
+    //await mouse.setPosition(new Point(cmd.x/displayScale, cmd.y/displayScale));
+    const give = new Uint16Array(2);
+    const g1 = (give[0]/65535.0*4.0-2.0)+cmd.x;
+    const g2 = (give[1]/65535.0*4.0-2.0)+cmd.y;
+    //const ptFinal = new Point(cmd.x/displayScale, cmd.y/displayScale);
+    const ptFinal = new Point(g1/displayScale, g2/displayScale);
+    await mouse.move(straightTo(ptFinal));
 }
 
 export async function mouseClick(cmd: MouseClickCommand, jref: ReturnData) :Promise<void>
@@ -227,7 +237,7 @@ export class DesktopActions
         DesktopActions.requireInteger(cmd.duration, 'duration', 100, 10000);
         DesktopActions.requireInteger(cmd.delay, 'delay', 0, 10000);
         await moveMouse({command: '', id: '', x: cmd.startX, y: cmd.startY}, {} as ReturnData);
-        await mouse.setPosition(new Point(cmd.startX / displayScale, cmd.startY / displayScale));
+        //await mouse.setPosition(new Point(cmd.startX / displayScale, cmd.startY / displayScale));
         await delay(30);
         try {
             await mouse.pressButton(Button.LEFT);
@@ -248,7 +258,7 @@ export class DesktopActions
             const x = cmd.startX + (cmd.endX - cmd.startX) * step / steps;
             const y = cmd.startY + (cmd.endY - cmd.startY) * step / steps;
             //await mouse.setPosition(new Point(x / displayScale, y / displayScale));
-            await moveMouse({ command: '', id: '', x: x, y: y}, {} as ReturnData);
+            await moveMouse({ command: '', id: '', x: x, y: y}, {} as ReturnData, 0);
         }
     }
 
