@@ -115,7 +115,22 @@ export async function moveMouse(cmd: MouseMoveCommand, jref: ReturnData) :Promis
     q.id = '1234';    
     q.x = cmd.x;
     q.y = cmd.y;
-
+    const xvals = new Uint16Array(5);
+    const yvals = new Uint16Array(5);
+    const tvals = new Uint16Array(5);
+    crypto.getRandomValues(xvals);
+    crypto.getRandomValues(yvals);
+    crypto.getRandomValues(tvals);
+    for(let i=0;i<5;i++)
+    {
+        const x1 = (xvals[i]/65535.0*2000.0-1000.0)+cmd.x;
+        const y1 = (yvals[i]/65535.0*2000.0-1000.0)+cmd.y;        
+        console.log("moving to ", x1, ', ', y1 );
+        await mouse.setPosition(new Point(cmd.x/displayScale, cmd.y/displayScale));
+        const t1 = tvals[i]/65535.0*100.0;
+        console.log('delay ', 100+t1, 'ms');
+        await delay(100+t1);
+    }
     await mouse.setPosition(new Point(cmd.x/displayScale, cmd.y/displayScale));
 }
 
