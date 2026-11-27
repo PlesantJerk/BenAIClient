@@ -3,7 +3,12 @@ import { Readable, pipeline } from 'node:stream';
 import { lstatSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 
+import type { FileTrackerCaptureFence } from './file-tracker-capture-fence.mts';
+
+export type FileTrackerGitSelection = Readonly<{ searchPath: string; executable?: string }>;
+
 export interface FileTrackerGitOptions {
+    publicationFence?: FileTrackerCaptureFence;
     input?: Buffer | Iterable<string | Buffer>;
     output?: (chunk: Buffer) => void;
     longRunning?: boolean;
@@ -25,9 +30,16 @@ export class FileTrackerCaptureError extends Error {
 }
 
 export class FileTrackerGit {
-    private readonly searchPath = process.env.PATH ?? '';
+    private readonly searchPath: string;
     private executable?: string;
     private readonly commands = new Set(['init', 'check-ignore', 'rev-parse', 'ls-tree', 'hash-object', 'update-index', 'write-tree', 'commit-tree', 'update-ref', 'cat-file', 'merge-base']);
+
+    constructor(selection?: FileTrackerGitSelection) {
+        this.searchPath = selection?.searchPath ?? process.env.PATH ?? '';
+        this.executable = selection?.executable;
+    }
+
+    captureSelection(): FileTrackerGitSelection { return { searchPath: this.searchPath, executable: this.executable }; }
 
     run(repoPath: string, args: readonly string[], options: FileTrackerGitOptions = {}): Promise<{ stdout: Buffer; exitCode: number }> {
         const command = args[0];
@@ -146,6 +158,9 @@ export class FileTrackerGit {
 
     private execute(executable: string, command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, options: FileTrackerGitOptions): Promise<{ stdout: Buffer; exitCode: number }> {
         return new Promise((resolve, reject) => {
+            if (command === 'update-ref' && options.publicationFence && !options.publicationFence.admitPublication()) {
+                throw new FileTrackerCaptureError('The file tracker route changed before Git publication; no snapshot was published.');
+            }
             const child = spawn(executable, args, { cwd, env, shell: false, windowsHide: true, stdio: 'pipe', signal: options.signal });
             const chunks: Buffer[] = [];
             let size = 0;

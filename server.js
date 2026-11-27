@@ -31,7 +31,8 @@ class Server
     #sEmail
     #CShell
     conversation_location = '.';
-    root_dir = '.';
+    #rootDirectory = '.';
+    #fileTrackers;
     #session_id;
     #client_name;
     #cdpBridge;
@@ -52,9 +53,11 @@ class Server
         this.root_dir = config.root_dir;
         this.conversation_location = config.conversation_location;
         this.#commands = new Map();
-        const fileTrackers = new FileTrackerOperations(() => ({ rootDirectory: this.root_dir, clientName: this.#client_name, account: this.#sEmail }));
+        const fileTrackers = this.#fileTrackers = new FileTrackerOperations(() => ({ rootDirectory: this.root_dir, clientName: this.#client_name, account: this.#sEmail }));
         this.#commands.set(FileTrackerOperations.openCommand, fileTrackers.open.bind(fileTrackers));
         this.#commands.set(FileTrackerOperations.commitCommand, fileTrackers.commit.bind(fileTrackers));
+        this.#commands.set(FileTrackerOperations.startCommand, fileTrackers.start.bind(fileTrackers));
+        this.#commands.set(FileTrackerOperations.statusCommand, fileTrackers.status.bind(fileTrackers));
         const checkpointReview = fileTrackers.createReview();
         this.#commands.set(FileTrackerReview.manifestCommand, checkpointReview.manifest.bind(checkpointReview));
         this.#commands.set(FileTrackerReview.fileCommand, checkpointReview.file.bind(checkpointReview));
@@ -104,11 +107,20 @@ class Server
         return (client_name ?? '').trim().toLowerCase() || 'default';
     }
 
+    get root_dir() { return this.#rootDirectory; }
+    set root_dir(root)
+    {
+        if (root !== this.#rootDirectory) this.#fileTrackers?.routeChanged();
+        this.#rootDirectory = root;
+    }
+
     get client_name() { return this.#client_name; }
 
     SetClientName(client_name)
     {
-        this.#client_name = Server.NormalizeClientName(client_name);
+        const normalized = Server.NormalizeClientName(client_name);
+        if (normalized !== this.#client_name) this.#fileTrackers?.routeChanged();
+        this.#client_name = normalized;
     }
 
     async StartPolling()
@@ -158,31 +170,36 @@ class Server
                 console.log('------------------', new Date().toLocaleString(), '------------------');
                 console.log('incomming command: ', cmd);
             }
-            var cb = this.#commands.get(cmd.command);
-            if (cb != null)
-            {
-                var jret = { success: true, msg: ""};
-                try
-                {
-                    await cb(cmd, jret);                                        
-                }
-                catch(err)
-                {
-                    jret.success = false;
-                    if (trackerCommand) jret.msg = 'The file tracker command failed unexpectedly.';
-                    else {
-                        console.error('failed to invoke function: ', err.stack || err)
-                        jret.msg = JSON.stringify(err);
-                    }
-                }
-                if (!trackerCommand) {
-                    console.log('result: ');
-                    console.log(JSON.stringify(jret));
-                    console.log('------------------');
-                }
-                await this.Reply(cmd.id, jret);
+            if (FileTrackerOperations.isCaptureHandle(cmd.command) && (typeof cmd.id !== 'string' || !/^[0-9A-Za-z-]+$/.test(cmd.id))) continue;
+            const callback = this.#commands.get(cmd.command);
+            if (!callback) continue;
+            const reply = this.#DispatchPollCommand(cmd, callback, trackerCommand);
+            if (this.#fileTrackers.capturePending && FileTrackerOperations.isLegacyWrite(cmd.command)) {
+                // A legacy open/commit queued behind a handle must not hold up status or unrelated polling.
+                void reply.catch(() => { console.error('The queued private file tracker command could not be returned.'); });
+            }
+            else await reply;
+        }
+    }
+
+    async #DispatchPollCommand(cmd, callback, trackerCommand)
+    {
+        const jret = { success: true, msg: "" };
+        try { await callback(cmd, jret); }
+        catch (err) {
+            jret.success = false;
+            if (trackerCommand) jret.msg = 'The file tracker command failed unexpectedly.';
+            else {
+                console.error('failed to invoke function: ', err.stack || err);
+                jret.msg = JSON.stringify(err);
             }
         }
+        if (!trackerCommand) {
+            console.log('result: ');
+            console.log(JSON.stringify(jret));
+            console.log('------------------');
+        }
+        await this.Reply(cmd.id, jret);
     }
 
     #MapPath(sPath)

@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { FileTrackerSource } from './file-tracker-files.mts';
 import { FileTrackerCaptureError, FileTrackerGit } from './file-tracker-git.mts';
+import type { FileTrackerCaptureFence } from './file-tracker-capture-fence.mts';
 import { FileTrackerLocation } from './file-tracker-location.mts';
 import { FileTrackerSnapshot } from './file-tracker-snapshot.mts';
 
@@ -14,6 +15,7 @@ export interface FileTrackerCaptureRequest {
     reviewProof?: unknown;
     validateLocation: () => void | Promise<void>;
     git?: FileTrackerGit;
+    publicationFence?: FileTrackerCaptureFence;
 }
 
 export interface FileTrackerChange { path: string; oldSha: string | null; newSha: string | null }
@@ -45,7 +47,7 @@ export class FileTrackerCapture {
         const message = this.message(request);
         const key = repoPath.toLowerCase();
         const previousWriter = this.writers.get(key) ?? Promise.resolve();
-        const result = previousWriter.then(() => this.captureLocked(rootPath, repoPath, git, message, validateLocation));
+        const result = previousWriter.then(() => this.captureLocked(rootPath, repoPath, git, message, validateLocation, request.publicationFence));
         const writer = result.then(() => {}, () => {});
         this.writers.set(key, writer);
         try { return await result; }
@@ -53,7 +55,7 @@ export class FileTrackerCapture {
     }
 
     private async captureLocked(rootPath: string, repoPath: string, git: FileTrackerGit, message: Buffer,
-        validateLocation: () => void | Promise<void>): Promise<FileTrackerCaptureReceipt> {
+        validateLocation: () => void | Promise<void>, publicationFence?: FileTrackerCaptureFence): Promise<FileTrackerCaptureReceipt> {
         await validateLocation();
         this.assertPrivateLocation(rootPath, repoPath);
         const previousCommit = await this.head(git, repoPath);
@@ -69,7 +71,7 @@ export class FileTrackerCapture {
             await validateLocation();
             snapshot.assertRoot();
             // Compare-and-swap also protects the ref from a second desktop-client process.
-            await git.run(repoPath, ['update-ref', '--no-deref', this.ref, commit, previousCommit ?? this.zeroSha]);
+            await git.run(repoPath, ['update-ref', '--no-deref', this.ref, commit, previousCommit ?? this.zeroSha], { publicationFence });
             return { success: true, changed, baseline: !previousCommit, previousCommit, commit, ...diff };
         } finally {
             // A scratch cleanup failure must never turn an already published ref into a retry signal.
