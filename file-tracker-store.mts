@@ -38,7 +38,14 @@ export class FileTrackerStore {
         const work = FileTrackerLocation.privateChild(location.project.path, FileTrackerLocation.workAreaName(location.project.path), true)!;
         const tracking = FileTrackerLocation.privateChild(work.path, 'tracking', true)!;
         const existing = FileTrackerLocation.privateChild(tracking.path, codeName, false);
-        if (existing) return this.attach(location, codeName, machine);
+        if (existing) {
+            const manifestName = FileTrackerLocation.matchingName(existing.path, 'tracker.json');
+            if (manifestName !== 'tracker.json') {
+                const reason = manifestName === undefined ? 'tracker.json is missing' : 'tracker.json has different capitalization';
+                throw new FileTrackerError(`Tracker folder '${codeName}' already exists, but ${reason}. It was left unchanged. Use a different tracker name or inspect the existing folder.`);
+            }
+            return this.attach(location, codeName, machine);
+        }
 
         const path = join(tracking.path, codeName);
         mkdirSync(path, { mode: 0o700 });

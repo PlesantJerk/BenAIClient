@@ -27,6 +27,24 @@ async function check(f) {
         trackerId: opened.trackerId, bindingId: opened.bindingId,
         conversationId: '17', statementId: '42', description: 'case test'
     }));
+    // Prior interrupted opens can leave the name occupied without a tracker manifest.
+    const partialName = 'quoreai-incomplete';
+    const partial = path.join(p, '.aiwork', 'tracking', partialName);
+    fs.mkdirSync(path.join(partial, 'repo.git'), { recursive: true });
+    const openPartial = () => client.command('QA_OpenFileTracker', { ...target, codeName: partialName });
+    const missing = await openPartial();
+    assert.equal(missing.success, false);
+    assert.match(missing.msg, /'quoreai-incomplete' already exists, but tracker\.json is missing/);
+    assert.match(missing.msg, /different tracker name/);
+    assert.equal(missing.trackerId, undefined);
+    assert.deepEqual(fs.readdirSync(partial), ['repo.git']);
+    assert.deepEqual(fs.readdirSync(path.join(partial, 'repo.git')), []);
+    fs.writeFileSync(path.join(partial, 'TRACKER.JSON'), 'preserve me');
+    const wrongCase = await openPartial();
+    assert.equal(wrongCase.success, false);
+    assert.match(wrongCase.msg, /different capitalization/);
+    assert.doesNotMatch(wrongCase.msg, /is missing/);
+    assert.equal(fs.readFileSync(path.join(partial, 'TRACKER.JSON'), 'utf8'), 'preserve me');
     const first = await open();
     assert.equal(first.created, true);
     assert.deepEqual(first.warnings, [], 'the project rule covers the existing .aiwork');
