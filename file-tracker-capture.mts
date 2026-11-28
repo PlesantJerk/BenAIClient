@@ -6,10 +6,11 @@ import type { FileTrackerCaptureFence } from './file-tracker-capture-fence.mts';
 import { FileTrackerLocation, type TrackerLocation } from './file-tracker-location.mts';
 import { FileTrackerScope, type TrackerInclude } from './file-tracker-scope.mts';
 import { FileTrackerSnapshot } from './file-tracker-snapshot.mts';
+import { FileTrackerStore } from './file-tracker-store.mts';
 
 export interface FileTrackerCaptureRequest {
     rootPath: string;
-    location?: TrackerLocation;
+    location?: TrackerLocation & Readonly<{ machine: string }>;
     includes?: readonly TrackerInclude[];
     repoPath: string;
     conversationId: string;
@@ -66,7 +67,7 @@ export class FileTrackerCapture {
     private async capturePinned(request: FileTrackerCaptureRequest, git: FileTrackerGit, message: Buffer): Promise<FileTrackerCaptureReceipt> {
         const { rootPath, repoPath, location, includes, validateLocation, publicationFence } = request;
         await validateLocation();
-        if (location) FileTrackerLocation.assertNotNested(location, includes?.map(entry => entry.path));
+        if (location) FileTrackerLocation.assertNotNested(location, location.machine, new FileTrackerStore(git), includes?.map(entry => entry.path));
         this.assertPrivateLocation(rootPath, repoPath);
         const previousCommit = await this.head(git, repoPath);
         const previous = previousCommit ? await this.oldFiles(git, repoPath, previousCommit) : new Map<string, string>();

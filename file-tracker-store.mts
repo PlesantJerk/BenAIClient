@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { FileTrackerError, FileTrackerLocation, type TrackerDirectory, type TrackerLocation } from './file-tracker-location.mts';
 import { FileTrackerGit } from './file-tracker-git.mts';
 import { FileTrackerSource } from './file-tracker-files.mts';
@@ -54,7 +54,7 @@ export class FileTrackerStore {
             if (requested && (!opened.includes || !FileTrackerScope.same(requested, opened.includes))) {
                 throw new FileTrackerError('The requested scope does not match this tracker. Use a different tracker name for a different scope.');
             }
-            FileTrackerLocation.assertNotNested(location, opened.manifest.version === 2 ? opened.manifest.includeDirectories : undefined);
+            FileTrackerLocation.assertNotNested(location, machine, this, opened.manifest.version === 2 ? opened.manifest.includeDirectories : undefined);
             return opened;
         }
         const create = () => this.create(location, workName, codeName, machine, verifyRoute, requested);
@@ -64,7 +64,7 @@ export class FileTrackerStore {
     private async create(location: TrackerLocation, workName: string, codeName: string, machine: string,
         verifyRoute: () => void, includes?: readonly TrackerInclude[]): Promise<OpenedTrackerStore> {
         verifyRoute();
-        FileTrackerLocation.assertNotNested(location, includes?.map(entry => entry.path));
+        FileTrackerLocation.assertNotNested(location, machine, this, includes?.map(entry => entry.path));
         const work = FileTrackerLocation.privateChild(location.project.path, workName, true)!;
         const tracking = FileTrackerLocation.privateChild(work.path, 'tracking', true)!;
         const path = join(tracking.path, codeName);
@@ -129,6 +129,30 @@ export class FileTrackerStore {
         return { repoPath: dirs.repo.path, manifest: expected, manifestFile: saved.identity, ...(includes ? { includes } : {}) };
     }
 
+    checkNeighbor(location: TrackerLocation, codeName: string, machine: string, roots: readonly string[], scoped: boolean): string {
+        const neighbor = this.inspect(location, codeName, machine);
+        const owner = location.project.path;
+        if (neighbor.includes) {
+            for (const include of neighbor.includes) {
+                const root = FileTrackerScope.absolute(owner, include);
+                if (!scoped && FileTrackerLocation.samePath(root, roots[0])) FileTrackerScope.assertCurrent(owner, [include]);
+                else if (roots.some(candidate => this.containsRoot(candidate, root) || this.containsRoot(root, candidate))) {
+                    throw FileTrackerLocation.overlap();
+                }
+            }
+        } else if (!scoped || !roots.some(root => FileTrackerLocation.samePath(root, owner))) {
+            throw FileTrackerLocation.overlap();
+        }
+        // This only classifies the neighboring source claim. Opening its Git objects still requires normal attach validation.
+        this.validateBare(neighbor.repoPath, false, undefined, false);
+        return neighbor.manifest.trackerId;
+    }
+
+    private containsRoot(parent: string, child: string): boolean {
+        const suffix = relative(parent, child);
+        return !isAbsolute(suffix) && suffix !== '..' && !suffix.startsWith(`..${sep}`);
+    }
+
     trackingHead(repoPath: string): string {
         const refs = this.childDirectory(repoPath, 'refs');
         const heads = this.childDirectory(refs, 'heads');
@@ -162,7 +186,7 @@ export class FileTrackerStore {
             includeDirectoryIdentities: includes.map(entry => entry.identities) } : { version: 1, ...base };
     }
 
-    private validateBare(repo: string, empty: boolean, verifiedHead?: string): string {
+    private validateBare(repo: string, empty: boolean, verifiedHead?: string, checkObjects = true): string {
         this.assertNames(repo, ['HEAD', 'config', 'objects', 'refs']);
         const config = FileTrackerStore.readSmallFile(repo, 'config', 2048);
         this.validateConfig(config.text);
@@ -176,8 +200,8 @@ export class FileTrackerStore {
         const headText = head ? FileTrackerStore.readSmallFile(heads, head, 64).text : null;
         if (headText && !FileTrackerStore.#sha.test(headText)) throw this.foreign();
         const objects = this.childDirectory(repo, 'objects');
-        // A continuation with precisely the verified ref does not open any Git objects.
-        if (verifiedHead === undefined || headText !== `${verifiedHead}\n`) this.validateObjects(objects, empty);
+        // Neighbor placement and an already verified continuation do not walk loose objects.
+        if (checkObjects && (verifiedHead === undefined || headText !== `${verifiedHead}\n`)) this.validateObjects(objects, empty);
         else {
             this.assertNames(this.childDirectory(objects, 'info'), []);
             this.assertNames(this.childDirectory(objects, 'pack'), []);

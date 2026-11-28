@@ -37,7 +37,7 @@ class FileTrackerCaptureWorker {
             const receipt = await this.#store.protectCapture(store.repoPath, async () => {
                 this.validateLocation();
                 return new FileTrackerCapture().capture({ ...metadata, rootPath: location.project.path, repoPath: store.repoPath,
-                    location, includes: store.includes,
+                    location: { ...location, machine: this.#binding.route.machine }, includes: store.includes,
                     validateLocation: this.validateLocation.bind(this), git: this.#git, publicationFence: this.#fence });
             });
             return { msg: '', ...receipt };

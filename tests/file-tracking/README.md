@@ -32,3 +32,11 @@ Run `node git-discovery.mjs` with the same offline environment and an external s
 ## Capture handles
 
 Run `node capture-jobs.mjs` from `tests/file-tracking`. Use the same offline environment above, with existing dependencies discoverable from the tested checkout's `node_modules` by the worker as well as the main thread. The fixture exercises the real native polling dispatcher, capture worker and stock Git: version/correlation validation, exact duplicate and wrong-scope handling, immutable capture metadata and bytes, terminal success/error receipts, real root and name transitions, and once-only publication. It verifies sliding expiry using a shortened test-only retention interval; production retains a terminal receipt for 20 minutes of inactivity while in-flight work does not expire. An expired or stale handle is uniformly unknown, never an instruction to start again. Only the used operation ID stays reserved for the lifetime of that desktop process. The synthetic transport does not test real web authentication or production HTTP delivery.
+## Scoped capture alongside a standalone tracker
+
+Run from the client checkout root with the offline environment above. The preload installs the same offline fixture guards in worker threads:
+
+```cmd
+node --import ./tests/file-tracking/scoped-coexistence.mjs ./tests/file-tracking/scoped-coexistence.mjs
+```
+ The scenario is one combined tracker for two selected repositories, one of which already has its own private tracker at its root. The combined tracker records working files under their repository-relative prefixes, not the other tracker's metadata or history. The standalone tracker keeps its own checkpoint sequence. This is not a migration or a general exemption for overlapping directory trees.

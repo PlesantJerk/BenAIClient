@@ -190,7 +190,7 @@ export class FileTrackerOperations {
         return this.#store.protectCapture(binding.store.repoPath, async () => {
             this.revalidate(binding);
             return this.#capture.capture({ rootPath: binding.location.project.path, repoPath: binding.store.repoPath,
-                location: binding.location, includes: binding.store.includes,
+                location: { ...binding.location, machine: binding.route.machine }, includes: binding.store.includes,
                 conversationId, statementId, description, reviewProof: command.reviewProof, validateLocation, git: this.#git });
         });
     }
