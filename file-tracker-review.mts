@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { FileTrackerGit } from './file-tracker-git.mts';
 import { FileTrackerError, FileTrackerLocation, type TrackerDirectory } from './file-tracker-location.mts';
 import { FileTrackerReviewObjects, type CheckpointPair, type CheckpointProvenance } from './file-tracker-review-objects.mts';
-import { FileTrackerStore, type OpenedTrackerStore } from './file-tracker-store.mts';
+import { FileTrackerScope } from './file-tracker-scope.mts';
+import { FileTrackerStore, type OpenedTrackerStore, type TrackerManifestIdentity } from './file-tracker-store.mts';
 import { FileTrackerVersionReader } from './file-tracker-version-reader.mts';
 
 export type TrackerRouteSnapshot = Readonly<{ rawRoot: string; machine: string; version: string; root: TrackerDirectory }>;
@@ -18,7 +19,7 @@ export class FileTrackerReview {
     static readonly fileCommand = 'QA_FileTrackerReadFile';
     static readonly #pageSize = 256;
     static readonly #pageBytes = 56 * 1024;
-    readonly #readers = new Map<string, FileTrackerVersionReader>();
+    readonly #readers = new Map<string, { reader: FileTrackerVersionReader; store: OpenedTrackerStore }>();
     readonly #manifests = new Map<string, { data: Manifest; head: string; timer: NodeJS.Timeout }>();
     readonly #cursorKey = randomBytes(32);
     readonly #git: FileTrackerGit;
@@ -98,7 +99,7 @@ export class FileTrackerReview {
             const final = await this.blob(objects, files.newSha);
             reader = new FileTrackerVersionReader(this.readerScope(command, route), store.repoPath, original, final,
                 () => this.closeReader(reader!));
-            this.#readers.set(reader.id, reader);
+            this.#readers.set(reader.id, { reader, store });
             opened.resolve({ success: true, ...pair, ...files, readerId: reader.id, ...reader.lengths() });
             // Keep the repository protections until both streams and the post-read scope check finish.
             await reader.copy(objects);
@@ -116,12 +117,19 @@ export class FileTrackerReview {
     private readTransfer(command: TrackerCommand, files: FilePair): object {
         const pair = this.pair(command);
         const { readerId, side, offset } = command;
-        const reader = typeof readerId === 'string' ? this.#readers.get(readerId) : undefined;
-        if (!reader) throw this.invalid();
-        reader.assertScope(this.readerScope(command, this.#route()));
+        const entry = typeof readerId === 'string' ? this.#readers.get(readerId) : undefined;
+        if (!entry) throw this.invalid();
+        const { reader, store } = entry;
+        const route = this.#route();
+        reader.assertScope(this.readerScope(command, route));
         if (command.transfer === 'close') {
             this.closeReader(reader);
             return { success: true, readerId };
+        }
+        if (store.includes) {
+            const location = this.location(command, route);
+            const current = this.#store.inspect(location, store.manifest.codeName, route.machine);
+            this.assertSameScope(store, current);
         }
         const position = Number(offset);
         if ((side !== 'original' && side !== 'final') || typeof offset !== 'string' || !Number.isSafeInteger(position) || position < 0 || String(position) !== offset) throw this.invalid();
@@ -158,7 +166,7 @@ export class FileTrackerReview {
             const fast = verifiedHead === head;
             const store = this.openExisting(command, currentRoute, location, fast ? head : undefined);
             if (store.repoPath !== repoPath) throw this.invalid();
-            const objects = new FileTrackerReviewObjects(this.#git, repoPath);
+            const objects = new FileTrackerReviewObjects(this.#git, repoPath, store.includes);
             await objects.assertReachable(pair.endCommit, head, fast ? head : undefined);
             const result = await action(pair, objects, store, route, head);
             const after = this.#store.trackingHead(repoPath);
@@ -167,6 +175,12 @@ export class FileTrackerReview {
             if (this.#route().version !== route.version) throw this.invalid();
             return result;
         });
+    }
+
+    private assertSameScope(expected: TrackerManifestIdentity, current: TrackerManifestIdentity): void {
+        if (current.manifest.trackerId !== expected.manifest.trackerId || current.manifest.repoIdentity !== expected.manifest.repoIdentity
+            || current.manifestFile !== expected.manifestFile || !current.includes
+            || !FileTrackerScope.same(expected.includes!, current.includes)) throw this.invalid();
     }
 
     private pair(command: TrackerCommand): CheckpointPair {
@@ -188,7 +202,7 @@ export class FileTrackerReview {
         const trackerId = command.trackerId;
         if (typeof trackerId !== 'string' || !FileTrackerStore.uuid.test(trackerId)) throw this.invalid();
         // attach is validation only, unlike open; do not run worktree nesting/ignore probes or issue a binding.
-        const store = this.#store.attach(location, codeName, route.machine, verifiedHead);
+        const store = this.#store.attachForReview(location, codeName, route.machine, verifiedHead);
         if (store.manifest.trackerId !== trackerId) throw this.invalid();
         return store;
     }
@@ -208,7 +222,7 @@ export class FileTrackerReview {
     }
 
     private cursorScope(pair: CheckpointPair, store: OpenedTrackerStore, route: TrackerRouteSnapshot): string {
-        const identity = [route.version, store.manifest.trackerId, store.manifest.repoIdentity, pair.startCommit, pair.endCommit];
+        const identity = [route.version, store.manifest.trackerId, store.manifest.repoIdentity, pair.startCommit, pair.endCommit, store.manifestFile, store.includes];
         return createHash('sha256').update(JSON.stringify(identity)).digest('hex');
     }
 

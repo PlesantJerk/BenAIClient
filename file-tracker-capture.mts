@@ -3,11 +3,14 @@ import path from 'node:path';
 import { FileTrackerSource } from './file-tracker-files.mts';
 import { FileTrackerCaptureError, FileTrackerGit } from './file-tracker-git.mts';
 import type { FileTrackerCaptureFence } from './file-tracker-capture-fence.mts';
-import { FileTrackerLocation } from './file-tracker-location.mts';
+import { FileTrackerLocation, type TrackerLocation } from './file-tracker-location.mts';
+import { FileTrackerScope, type TrackerInclude } from './file-tracker-scope.mts';
 import { FileTrackerSnapshot } from './file-tracker-snapshot.mts';
 
 export interface FileTrackerCaptureRequest {
     rootPath: string;
+    location?: TrackerLocation;
+    includes?: readonly TrackerInclude[];
     repoPath: string;
     conversationId: string;
     statementId: string | null;
@@ -42,34 +45,41 @@ export class FileTrackerCapture {
     private readonly writers = new Map<string, Promise<void>>();
 
     async capture(request: FileTrackerCaptureRequest): Promise<FileTrackerCaptureReceipt> {
-        const { rootPath, repoPath, validateLocation } = request;
+        const { repoPath } = request;
         const git = request.git ?? this.git;
         const message = this.message(request);
         const key = repoPath.toLowerCase();
         const previousWriter = this.writers.get(key) ?? Promise.resolve();
-        const result = previousWriter.then(() => this.captureLocked(rootPath, repoPath, git, message, validateLocation, request.publicationFence));
+        const result = previousWriter.then(() => this.captureLocked(request, git, message));
         const writer = result.then(() => {}, () => {});
         this.writers.set(key, writer);
         try { return await result; }
         finally { if (this.writers.get(key) === writer) this.writers.delete(key); }
     }
 
-    private async captureLocked(rootPath: string, repoPath: string, git: FileTrackerGit, message: Buffer,
-        validateLocation: () => void | Promise<void>, publicationFence?: FileTrackerCaptureFence): Promise<FileTrackerCaptureReceipt> {
+    private async captureLocked(request: FileTrackerCaptureRequest, git: FileTrackerGit, message: Buffer): Promise<FileTrackerCaptureReceipt> {
+        const { rootPath, includes } = request;
+        const capture = () => this.capturePinned(request, git, message);
+        return includes ? FileTrackerScope.withPinnedRoots(rootPath, includes, capture) : capture();
+    }
+
+    private async capturePinned(request: FileTrackerCaptureRequest, git: FileTrackerGit, message: Buffer): Promise<FileTrackerCaptureReceipt> {
+        const { rootPath, repoPath, location, includes, validateLocation, publicationFence } = request;
         await validateLocation();
+        if (location) FileTrackerLocation.assertNotNested(location, includes?.map(entry => entry.path));
         this.assertPrivateLocation(rootPath, repoPath);
         const previousCommit = await this.head(git, repoPath);
         const previous = previousCommit ? await this.oldFiles(git, repoPath, previousCommit) : new Map<string, string>();
         const scratch = mkdtempSync(path.join(path.dirname(repoPath), '.capture-'));
         try {
-            const snapshot = new FileTrackerSnapshot(git, repoPath, rootPath, scratch, previous);
-            const current = await snapshot.capture();
+            const snapshot = includes ? undefined : new FileTrackerSnapshot(git, repoPath, rootPath, scratch, previous);
+            const current = snapshot ? await snapshot.capture() : await this.captureIncluded(request, git, previous);
             const diff = this.diff(previous, current);
             const changed = !previousCommit || Object.values(diff.counts).some(Boolean);
             if (!changed) return { success: true, changed, baseline: false, previousCommit, commit: await this.confirmUnchanged(git, repoPath, previousCommit!, validateLocation, snapshot), ...diff };
             const commit = await this.writeCommit(git, repoPath, scratch, previousCommit, current, message);
             await validateLocation();
-            snapshot.assertRoot();
+            snapshot?.assertRoot();
             // Compare-and-swap also protects the ref from a second desktop-client process.
             await git.run(repoPath, ['update-ref', '--no-deref', this.ref, commit, previousCommit ?? this.zeroSha], { publicationFence });
             return { success: true, changed, baseline: !previousCommit, previousCommit, commit, ...diff };
@@ -77,6 +87,24 @@ export class FileTrackerCapture {
             // A scratch cleanup failure must never turn an already published ref into a retry signal.
             try { rmSync(scratch, { recursive: true, force: true }); } catch { /* private orphan, never reused */ }
         }
+    }
+
+    private async captureIncluded(request: FileTrackerCaptureRequest, git: FileTrackerGit,
+        previous: ReadonlyMap<string, string>): Promise<Map<string, string>> {
+        const { rootPath, repoPath, includes } = request;
+        const previousByRoot = FileTrackerScope.partition(previous, includes!);
+        const current = new Map<string, string>();
+        for (const include of includes!) {
+            const scratch = mkdtempSync(path.join(path.dirname(repoPath), '.capture-'));
+            try {
+                const snapshot = new FileTrackerSnapshot(git, repoPath, FileTrackerScope.absolute(rootPath, include), scratch,
+                    previousByRoot.get(include.path)!, include.path + '/');
+                for (const [name, sha] of await snapshot.capture()) current.set(include.path + '/' + name, sha);
+            } finally {
+                try { rmSync(scratch, { recursive: true, force: true }); } catch { /* private orphan, never reused */ }
+            }
+        }
+        return current;
     }
 
     private assertPrivateLocation(rootPath: string, repoPath: string): void {
@@ -110,9 +138,9 @@ export class FileTrackerCapture {
     }
 
     private async confirmUnchanged(git: FileTrackerGit, repoPath: string, previous: string,
-        validateLocation: () => void | Promise<void>, snapshot: FileTrackerSnapshot): Promise<string> {
+        validateLocation: () => void | Promise<void>, snapshot?: FileTrackerSnapshot): Promise<string> {
         await validateLocation();
-        snapshot.assertRoot();
+        snapshot?.assertRoot();
         if (await this.head(git, repoPath) !== previous) throw new FileTrackerCaptureError('The private tracker changed during capture; no snapshot was published by this request.');
         return previous;
     }

@@ -1,6 +1,6 @@
 import { lstatSync, mkdirSync, readdirSync, realpathSync, type BigIntStats } from 'node:fs';
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
-import { FileTrackerSource } from './file-tracker-files.mts';
+import { FileTrackerSource, type TrackerDirectoryEntry } from './file-tracker-files.mts';
 
 export class FileTrackerError extends Error {}
 
@@ -101,12 +101,41 @@ export class FileTrackerLocation {
         return this.samePath(left.path, right.path) && left.identity === right.identity;
     }
 
-    static assertNotNested(location: TrackerLocation): void {
+    static assertNotNested(location: TrackerLocation, included?: readonly string[]): void {
         for (let p = dirname(location.project.path); ; p = dirname(p)) {
             if (this.hasTrackerArea(p)) throw new FileTrackerError('The selected directory is inside another tracker target.');
             if (this.samePath(location.virtualRoot.path, p)) break;
         }
-        this.assertNoTrackedDescendant(location.project.path);
+        if (!included) {
+            this.assertNoTrackedDescendant(location.project.path);
+            return;
+        }
+        const source = new FileTrackerSource(location.project.path);
+        for (const include of included) this.assertNoScopedTrackerOverlap(source, include.split('/'));
+    }
+
+    private static assertNoScopedTrackerOverlap(source: FileTrackerSource, root: readonly string[]): void {
+        for (let length = 1; length < root.length; length++) this.listScoped(source, root.slice(0, length));
+        const pending = [[...root]];
+        while (pending.length) {
+            const parts = pending.pop()!;
+            for (const child of this.listScoped(source, parts)) {
+                if (child.directory && !child.unsafe && this.ordinary(child.name)) pending.push([...parts, child.name]);
+            }
+        }
+    }
+
+    private static listScoped(source: FileTrackerSource, parts: readonly string[]): TrackerDirectoryEntry[] {
+        return source.directory(parts, entries => {
+            const work = entries.filter(entry => entry.name.toLowerCase() === '.aiwork');
+            if (work.length > 1) throw new FileTrackerError('An included path has a case-insensitive metadata name collision.');
+            if (!work[0]?.directory || work[0].unsafe) return;
+            source.directory([...parts, work[0].name], children => {
+                if (children.some(entry => entry.name.toLowerCase() === 'tracking')) {
+                    throw new FileTrackerError('An included directory overlaps another tracker target.');
+                }
+            });
+        });
     }
 
     private static hasTrackerArea(path: string): boolean {

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { FileTrackerSource } from './file-tracker-files.mts';
+import { FileTrackerScope, type TrackerInclude } from './file-tracker-scope.mts';
 import { FileTrackerGit } from './file-tracker-git.mts';
 import { FileTrackerError } from './file-tracker-location.mts';
 
@@ -19,7 +20,13 @@ export class FileTrackerReviewObjects {
     readonly #git: FileTrackerGit;
     readonly #repo: string;
 
-    constructor(git: FileTrackerGit, repo: string) { this.#git = git; this.#repo = repo; }
+    readonly #prefixes?: ReadonlySet<string>;
+
+    constructor(git: FileTrackerGit, repo: string, includes?: readonly TrackerInclude[]) {
+        this.#git = git;
+        this.#repo = repo;
+        if (includes) this.#prefixes = new Set(includes.map(entry => entry.path));
+    }
 
     static isSha(value: unknown): value is string { return typeof value === 'string' && value.length === 40 && this.#id.test(value) && value !== '0'.repeat(40); }
 
@@ -76,6 +83,7 @@ export class FileTrackerReviewObjects {
         await this.#git.records(this.#repo, ['ls-tree', '-r', '-z', '--full-tree', sha, '--'], 0, bytes => {
             const match = /^100644 blob ([0-9a-f]{40})\t(.+)$/su.exec(this.utf8(bytes));
             if (!match || !FileTrackerReviewObjects.isSha(match[1]) || !FileTrackerReviewObjects.isPath(match[2])) throw this.invalid();
+            if (this.#prefixes && !FileTrackerScope.contains(this.#prefixes, match[2])) throw this.invalid();
             this.addPath(match[2], match[1], root);
             files.set(match[2], match[1]);
         });

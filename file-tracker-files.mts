@@ -53,6 +53,18 @@ export class FileTrackerSource {
         finally { pin.release(); }
     }
 
+    pinDirectories(paths: readonly (readonly string[])[]): { release: () => void } {
+        const pins: ReturnType<FileTrackerSource['pin']>[] = [];
+        const release = () => { while (pins.length) pins.pop()!.release(); };
+        try {
+            for (const parts of paths) pins.push(this.pin(parts));
+            return { release };
+        } catch (error) {
+            release();
+            throw error;
+        }
+    }
+
     async withPinnedFile<T>(name: string, operation: () => Promise<T>): Promise<T> {
         if (!FileTrackerSource.safeName(name)) throw new FileTrackerCaptureError('File tracking rejected an unsafe file name.');
         const pin = this.pin([]);

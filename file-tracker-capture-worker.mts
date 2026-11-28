@@ -3,7 +3,7 @@ import { FileTrackerBinding, type SelectedTracker } from './file-tracker-binding
 import { FileTrackerCaptureFence } from './file-tracker-capture-fence.mts';
 import { FileTrackerCapture, type FileTrackerCaptureReceipt } from './file-tracker-capture.mts';
 import { FileTrackerCaptureError, FileTrackerGit, type FileTrackerGitSelection } from './file-tracker-git.mts';
-import { FileTrackerError, FileTrackerLocation } from './file-tracker-location.mts';
+import { FileTrackerError } from './file-tracker-location.mts';
 import { FileTrackerStore } from './file-tracker-store.mts';
 
 export type FileTrackerCaptureMetadata = Readonly<{
@@ -36,8 +36,8 @@ class FileTrackerCaptureWorker {
             FileTrackerBinding.validate(this.#binding, this.#store);
             const receipt = await this.#store.protectCapture(store.repoPath, async () => {
                 this.validateLocation();
-                FileTrackerLocation.assertNotNested(location);
                 return new FileTrackerCapture().capture({ ...metadata, rootPath: location.project.path, repoPath: store.repoPath,
+                    location, includes: store.includes,
                     validateLocation: this.validateLocation.bind(this), git: this.#git, publicationFence: this.#fence });
             });
             return { msg: '', ...receipt };

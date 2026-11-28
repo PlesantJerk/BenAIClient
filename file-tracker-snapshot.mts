@@ -20,13 +20,15 @@ export class FileTrackerSnapshot {
     private readonly git: FileTrackerGit;
     private readonly repoPath: string;
     private readonly scratchRoot: string;
+    private readonly prefix: string;
     private readonly previous: ReadonlyMap<string, string>;
 
-    constructor(git: FileTrackerGit, repoPath: string, rootPath: string, scratchRoot: string, previous: ReadonlyMap<string, string>) {
+    constructor(git: FileTrackerGit, repoPath: string, rootPath: string, scratchRoot: string, previous: ReadonlyMap<string, string>, prefix = '') {
         this.git = git;
         this.repoPath = repoPath;
         this.scratchRoot = scratchRoot;
         this.previous = previous;
+        this.prefix = prefix;
         this.source = new FileTrackerSource(rootPath);
         this.workTree = path.join(scratchRoot, 'rules');
         for (const name of previous.keys()) this.rememberTrackedPath(name);
@@ -107,7 +109,7 @@ export class FileTrackerSnapshot {
         const parts = [...parent, entry.name];
         const relative = parts.join('/');
         const key = relative.toLowerCase();
-        if (!FileTrackerSource.safeName(entry.name) || entry.unsafe || relative.length > 512) {
+        if (!FileTrackerSource.safeName(entry.name) || entry.unsafe || this.prefix.length + relative.length > 512) {
             if (this.trackedFiles.has(key) || this.trackedDirectories.has(key)) throw new FileTrackerCaptureError('A tracked path became unsafe; no snapshot was published.');
             return [];
         }

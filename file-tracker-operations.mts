@@ -8,12 +8,14 @@ import { FileTrackerCaptureError, FileTrackerGit } from './file-tracker-git.mts'
 import { FileTrackerIgnore } from './file-tracker-ignore.mts';
 import { FileTrackerError, FileTrackerLocation, type TrackerLocation } from './file-tracker-location.mts';
 import { FileTrackerReview, type TrackerCommand, type TrackerRouteSnapshot } from './file-tracker-review.mts';
+import { FileTrackerScope } from './file-tracker-scope.mts';
 import { FileTrackerStore } from './file-tracker-store.mts';
 
 type TrackerRoute = Readonly<{ rootDirectory: string; clientName: string; account: string }>;
 
 export class FileTrackerOperations {
     static readonly openCommand = 'QA_OpenFileTracker';
+    static readonly scopedOpenCommand = 'QA_OpenScopedFileTracker';
     static readonly commitCommand = 'QA_CommitFileTracker';
     static readonly startCommand = 'QA_StartFileTrackerCapture';
     static readonly statusCommand = 'QA_GetFileTrackerCaptureStatus';
@@ -47,7 +49,7 @@ export class FileTrackerOperations {
     }
 
     static isLegacyWrite(command: unknown): boolean {
-        return command === this.openCommand || command === this.commitCommand;
+        return command === this.openCommand || command === this.scopedOpenCommand || command === this.commitCommand;
     }
 
     get capturePending(): boolean { return this.#jobs.hasPending; }
@@ -64,7 +66,11 @@ export class FileTrackerOperations {
     }
 
     async open(command: TrackerCommand, result: object): Promise<void> {
-        await this.run(() => this.openTracker(command), result, 'The private file tracker could not be opened safely.');
+        await this.run(() => this.openTracker(command, false), result, 'The private file tracker could not be opened safely.');
+    }
+
+    async openScoped(command: TrackerCommand, result: object): Promise<void> {
+        await this.run(() => this.openTracker(command, true), result, 'The scoped file tracker could not be opened safely.');
     }
 
     async commit(command: TrackerCommand, result: object): Promise<void> {
@@ -142,7 +148,7 @@ export class FileTrackerOperations {
         }
     }
 
-    private async openTracker(command: TrackerCommand) {
+    private async openTracker(command: TrackerCommand, scoped: boolean) {
         const route = this.readRoute();
         const generation = this.#routeGeneration;
         if (typeof command.virtualRoot !== 'string' || command.virtualRoot !== route.rawRoot) {
@@ -151,9 +157,12 @@ export class FileTrackerOperations {
         const codeName = FileTrackerLocation.codeName(command.codeName);
         if (this.#bindings.size >= 512) throw new FileTrackerError('The client reached its pilot limit of open tracker bindings.');
         const location = FileTrackerLocation.project(route.rawRoot, command.projectPath);
-        FileTrackerLocation.assertNotNested(location);
+        if (!scoped && Object.hasOwn(command, 'includeDirectories')) {
+            throw new FileTrackerError('Use the scoped open command to request include directories explicitly.');
+        }
+        const includes = scoped ? FileTrackerScope.resolve(location.project.path, command.includeDirectories) : undefined;
         const verify = () => { this.verifySelection(location, route); };
-        const store = await this.#store.open(location, codeName, route.machine, verify);
+        const store = await this.#store.open(location, codeName, route.machine, verify, includes);
         const binding = { location, store, route, generation };
         this.revalidate(binding);
         const warnings = await this.#ignore.warnings(location, store.repoPath);
@@ -161,7 +170,8 @@ export class FileTrackerOperations {
         const bindingId = randomUUID();
         this.#bindings.set(bindingId, binding);
         return { success: true, trackerId: store.manifest.trackerId, bindingId, codeName,
-            projectPath: location.projectPath, warnings, created: store.created };
+            projectPath: location.projectPath, warnings, created: store.created,
+            ...(store.manifest.version === 2 ? { includeDirectories: store.manifest.includeDirectories } : {}) };
     }
 
     private async commitTracker(command: TrackerCommand) {
@@ -179,8 +189,8 @@ export class FileTrackerOperations {
         const validateLocation = () => { this.revalidate(binding); };
         return this.#store.protectCapture(binding.store.repoPath, async () => {
             this.revalidate(binding);
-            FileTrackerLocation.assertNotNested(binding.location);
             return this.#capture.capture({ rootPath: binding.location.project.path, repoPath: binding.store.repoPath,
+                location: binding.location, includes: binding.store.includes,
                 conversationId, statementId, description, reviewProof: command.reviewProof, validateLocation, git: this.#git });
         });
     }

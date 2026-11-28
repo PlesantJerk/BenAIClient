@@ -1,23 +1,28 @@
 import { randomUUID } from 'node:crypto';
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { FileTrackerError, FileTrackerLocation, type TrackerDirectory, type TrackerLocation } from './file-tracker-location.mts';
 import { FileTrackerGit } from './file-tracker-git.mts';
 import { FileTrackerSource } from './file-tracker-files.mts';
+import { FileTrackerScope, type TrackerInclude } from './file-tracker-scope.mts';
 
-export type TrackerManifest = Readonly<{
-    version: 1; trackerId: string; codeName: string; root: string; virtualRoot: string;
+type TrackerManifestBase = Readonly<{
+    trackerId: string; codeName: string; root: string; virtualRoot: string;
     projectPath: string; machine: string; projectIdentity: string; virtualRootIdentity: string;
     workIdentity: string; trackingIdentity: string; storeIdentity: string; repoIdentity: string;
 }>;
+
+export type TrackerManifest = TrackerManifestBase & (Readonly<{ version: 1 }> | Readonly<{
+    version: 2; includeDirectories: readonly string[]; includeDirectoryIdentities: readonly (readonly string[])[];
+}>);
+
+export type TrackerManifestIdentity = Readonly<{ repoPath: string; manifest: TrackerManifest; manifestFile: string; includes?: readonly TrackerInclude[] }>;
 
 type StoreDirectories = Readonly<{
     work: TrackerDirectory; tracking: TrackerDirectory; store: TrackerDirectory; repo: TrackerDirectory;
 }>;
 
-export type OpenedTrackerStore = Readonly<{
-    repoPath: string; manifest: TrackerManifest; manifestFile: string; configFile: string; created: boolean;
-}>;
+export type OpenedTrackerStore = TrackerManifestIdentity & Readonly<{ configFile: string; created: boolean }>;
 
 export class FileTrackerStore {
     static readonly #branch = 'tracking';
@@ -28,32 +33,47 @@ export class FileTrackerStore {
 
     constructor(git: FileTrackerGit) { this.git = git; }
 
-    async open(location: TrackerLocation, codeName: string, machine: string, verifyRoute: () => void): Promise<OpenedTrackerStore> {
+    async open(location: TrackerLocation, codeName: string, machine: string, verifyRoute: () => void, requested?: readonly TrackerInclude[]): Promise<OpenedTrackerStore> {
         await this.git.checkAvailable(location.project.path); // No private directories exist on our behalf until Git passes preflight.
-        return new FileTrackerSource(location.project.path).withPinnedDirectory(() => this.openPinned(location, codeName, machine, verifyRoute));
+        return new FileTrackerSource(location.project.path).withPinnedDirectory(() => this.openPinned(location, codeName, machine, verifyRoute, requested));
     }
 
-    private async openPinned(location: TrackerLocation, codeName: string, machine: string, verifyRoute: () => void): Promise<OpenedTrackerStore> {
+    private async openPinned(location: TrackerLocation, codeName: string, machine: string, verifyRoute: () => void, requested?: readonly TrackerInclude[]): Promise<OpenedTrackerStore> {
         verifyRoute();
-        const work = FileTrackerLocation.privateChild(location.project.path, FileTrackerLocation.workAreaName(location.project.path), true)!;
-        const tracking = FileTrackerLocation.privateChild(work.path, 'tracking', true)!;
-        const existing = FileTrackerLocation.privateChild(tracking.path, codeName, false);
+        const workName = FileTrackerLocation.workAreaName(location.project.path);
+        const work = FileTrackerLocation.privateChild(location.project.path, workName, false);
+        const tracking = work && FileTrackerLocation.privateChild(work.path, 'tracking', false);
+        const existing = tracking && FileTrackerLocation.privateChild(tracking.path, codeName, false);
         if (existing) {
             const manifestName = FileTrackerLocation.matchingName(existing.path, 'tracker.json');
             if (manifestName !== 'tracker.json') {
                 const reason = manifestName === undefined ? 'tracker.json is missing' : 'tracker.json has different capitalization';
                 throw new FileTrackerError(`Tracker folder '${codeName}' already exists, but ${reason}. It was left unchanged. Use a different tracker name or inspect the existing folder.`);
             }
-            return this.attach(location, codeName, machine);
+            const opened = this.attach(location, codeName, machine);
+            if (requested && (!opened.includes || !FileTrackerScope.same(requested, opened.includes))) {
+                throw new FileTrackerError('The requested scope does not match this tracker. Use a different tracker name for a different scope.');
+            }
+            FileTrackerLocation.assertNotNested(location, opened.manifest.version === 2 ? opened.manifest.includeDirectories : undefined);
+            return opened;
         }
+        const create = () => this.create(location, workName, codeName, machine, verifyRoute, requested);
+        return requested ? FileTrackerScope.withPinnedRoots(location.project.path, requested, create) : create();
+    }
 
+    private async create(location: TrackerLocation, workName: string, codeName: string, machine: string,
+        verifyRoute: () => void, includes?: readonly TrackerInclude[]): Promise<OpenedTrackerStore> {
+        verifyRoute();
+        FileTrackerLocation.assertNotNested(location, includes?.map(entry => entry.path));
+        const work = FileTrackerLocation.privateChild(location.project.path, workName, true)!;
+        const tracking = FileTrackerLocation.privateChild(work.path, 'tracking', true)!;
         const path = join(tracking.path, codeName);
         mkdirSync(path, { mode: 0o700 });
         const store = FileTrackerLocation.privateChild(tracking.path, codeName, false)!;
         mkdirSync(join(store.path, 'repo.git'), { mode: 0o700 });
         const repo = FileTrackerLocation.privateChild(store.path, 'repo.git', false)!;
         const dirs = { work, tracking, store, repo };
-        const expected = this.manifest(location, dirs, codeName, machine, randomUUID());
+        const expected = this.manifest(location, dirs, codeName, machine, randomUUID(), includes);
         verifyRoute();
         this.assertSameDirectories(location, expected);
         return new FileTrackerSource(repo.path).withPinnedDirectory(async () => {
@@ -77,19 +97,36 @@ export class FileTrackerStore {
     }
 
     attach(location: TrackerLocation, codeName: string, machine: string, verifiedHead?: string): OpenedTrackerStore {
+        const identity = this.inspect(location, codeName, machine);
+        if (identity.includes) FileTrackerScope.assertCurrent(location.project.path, identity.includes);
+        return this.validateStore(identity, verifiedHead);
+    }
+
+    attachForReview(location: TrackerLocation, codeName: string, machine: string, verifiedHead?: string): OpenedTrackerStore {
+        return this.validateStore(this.inspect(location, codeName, machine), verifiedHead);
+    }
+
+    private validateStore(identity: TrackerManifestIdentity, verifiedHead?: string): OpenedTrackerStore {
+        const config = this.validateBare(identity.repoPath, false, verifiedHead);
+        return { ...identity, configFile: config, created: false };
+    }
+
+    inspect(location: TrackerLocation, codeName: string, machine: string): TrackerManifestIdentity {
         const dirs = this.directories(location, codeName);
         new FileTrackerSource(dirs.repo.path).assertRoot();
-        const saved = FileTrackerStore.readSmallFile(dirs.store.path, 'tracker.json', 16_384);
+        const saved = FileTrackerStore.readSmallFile(dirs.store.path, 'tracker.json');
         let raw: Partial<TrackerManifest> | undefined;
         try { raw = JSON.parse(saved.text); } catch { /* invalid or foreign manifest */ }
         if (!raw || typeof raw.trackerId !== 'string' || !FileTrackerStore.uuid.test(raw.trackerId)) throw this.foreign();
-        const expected = this.manifest(location, dirs, codeName, machine, raw.trackerId);
+        if (raw.version !== 1 && raw.version !== 2) throw this.foreign();
+        if (raw.version === 1 && saved.size > 16_384n) throw this.foreign();
+        const includes = raw.version === 2 ? FileTrackerScope.fromManifest(raw.includeDirectories, raw.includeDirectoryIdentities) : undefined;
+        const expected = this.manifest(location, dirs, codeName, machine, raw.trackerId, includes);
         if (Object.keys(raw).length !== Object.keys(expected).length) throw this.foreign();
-        for (const key of Object.keys(expected) as (keyof TrackerManifest)[]) {
-            if (!Object.hasOwn(raw, key) || raw[key] !== expected[key]) throw this.foreign();
+        for (const [key, value] of Object.entries(expected)) {
+            if (!Object.hasOwn(raw, key) || JSON.stringify(Reflect.get(raw, key)) !== JSON.stringify(value)) throw this.foreign();
         }
-        const config = this.validateBare(dirs.repo.path, false, verifiedHead);
-        return { repoPath: dirs.repo.path, manifest: expected, manifestFile: saved.identity, configFile: config, created: false };
+        return { repoPath: dirs.repo.path, manifest: expected, manifestFile: saved.identity, ...(includes ? { includes } : {}) };
     }
 
     trackingHead(repoPath: string): string {
@@ -115,11 +152,14 @@ export class FileTrackerStore {
             || dirs.store.identity !== expected.storeIdentity || dirs.repo.identity !== expected.repoIdentity) throw this.foreign();
     }
 
-    private manifest(location: TrackerLocation, dirs: StoreDirectories, codeName: string, machine: string, trackerId: string): TrackerManifest {
-        return { version: 1, trackerId, codeName, virtualRoot: location.virtualRoot.path, root: location.project.path,
+    private manifest(location: TrackerLocation, dirs: StoreDirectories, codeName: string, machine: string, trackerId: string,
+        includes?: readonly TrackerInclude[]): TrackerManifest {
+        const base = { trackerId, codeName, virtualRoot: location.virtualRoot.path, root: location.project.path,
             projectPath: location.projectPath, machine, virtualRootIdentity: location.virtualRoot.identity,
             projectIdentity: location.project.identity, workIdentity: dirs.work.identity, trackingIdentity: dirs.tracking.identity,
             storeIdentity: dirs.store.identity, repoIdentity: dirs.repo.identity };
+        return includes ? { version: 2, ...base, includeDirectories: includes.map(entry => entry.path),
+            includeDirectoryIdentities: includes.map(entry => entry.identities) } : { version: 1, ...base };
     }
 
     private validateBare(repo: string, empty: boolean, verifiedHead?: string): string {
@@ -192,7 +232,7 @@ export class FileTrackerStore {
         return stat;
     }
 
-    private static readSmallFile(parent: string, name: string, limit: number): { text: string; identity: string } {
+    private static readSmallFile(parent: string, name: string, limit?: number): { text: string; identity: string; size: bigint } {
         if (FileTrackerLocation.matchingName(parent, name) !== name) throw new FileTrackerError('A required private tracker file is missing or has conflicting casing.');
         const path = join(parent, name);
         const before = this.ordinaryFile(path);
@@ -200,13 +240,15 @@ export class FileTrackerStore {
         try {
             const opened = fstatSync(fd, { bigint: true });
             const identity = FileTrackerLocation.identity(before);
-            if (FileTrackerLocation.identity(opened) !== identity || opened.size > BigInt(limit)) throw new FileTrackerError('A private tracker file changed or exceeds its expected size.');
-            const bytes = Buffer.alloc(limit + 1);
-            const count = readSync(fd, bytes, 0, bytes.length, 0);
+            if (FileTrackerLocation.identity(opened) !== identity || (limit !== undefined && opened.size > BigInt(limit))) {
+                throw new FileTrackerError('A private tracker file changed or exceeds its expected size.');
+            }
+            const bytes = limit === undefined ? readFileSync(fd) : Buffer.alloc(limit + 1);
+            const count = limit === undefined ? bytes.length : readSync(fd, bytes, 0, bytes.length, 0);
             const after = this.ordinaryFile(path);
             if (BigInt(count) !== opened.size || FileTrackerLocation.identity(after) !== identity || after.mtimeNs !== opened.mtimeNs
                 || after.ctimeNs !== opened.ctimeNs || after.size !== opened.size) throw new FileTrackerError('A private tracker file changed while being checked.');
-            return { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, count)), identity };
+            return { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, count)), identity, size: opened.size };
         } finally { closeSync(fd); }
     }
 }

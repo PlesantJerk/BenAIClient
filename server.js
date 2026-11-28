@@ -55,6 +55,7 @@ class Server
         this.#commands = new Map();
         const fileTrackers = this.#fileTrackers = new FileTrackerOperations(() => ({ rootDirectory: this.root_dir, clientName: this.#client_name, account: this.#sEmail }));
         this.#commands.set(FileTrackerOperations.openCommand, fileTrackers.open.bind(fileTrackers));
+        this.#commands.set(FileTrackerOperations.scopedOpenCommand, fileTrackers.openScoped.bind(fileTrackers));
         this.#commands.set(FileTrackerOperations.commitCommand, fileTrackers.commit.bind(fileTrackers));
         this.#commands.set(FileTrackerOperations.startCommand, fileTrackers.start.bind(fileTrackers));
         this.#commands.set(FileTrackerOperations.statusCommand, fileTrackers.status.bind(fileTrackers));
